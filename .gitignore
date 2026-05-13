@@ -48,3 +48,4 @@ gardens/
 sessions/
 *.db
 .claude/
+.crd/
