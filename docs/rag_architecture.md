@@ -1,0 +1,398 @@
+# BEN-0 RAG Architecture
+
+**Status:** Implemented — R1 through R5 complete (May 12, 2026)  
+**Last updated:** 2026-05-12  
+**Authors:** Kevin Kubeck, Dewey
+
+---
+
+## Design Constraint
+
+BEN-0 is for distribution. Users are botanists and collection managers, not ML engineers.  
+The entire RAG pipeline must be **self-bootstrapping**: drop institutional data in a folder, run the pipeline, get a working knowledge system. No manual curation required for basic operation.
+
+"Self-reconstructing" means: delete the derived layers, drop fresh data, re-run, and the system rebuilds everything. Compiled knowledge is a **cache**, not a cathedral.
+
+---
+
+## Three-Lane RAG
+
+At query time, BEN-0 retrieves from three lanes simultaneously:
+
+```
+Lane A: Source RAG           — "What does the original material say?"
+Lane B: Compiled Codex RAG   — "What is our interpreted domain model?"
+Lane C: Rule / Graph Layer   — "What constraints and mappings are authoritative?"
+```
+
+### Why three lanes?
+
+| Lane | What it holds | Why it exists |
+|------|--------------|---------------|
+| **A — Source** | Chunked raw documents with metadata | Preserves original nuance; court of appeal for any claim |
+| **B — Codex** | Auto-generated domain summaries with source citations | Gives the local model orientation; compensates for small context windows |
+| **C — Rules** | Structured YAML/JSON: status mappings, date rules, known exceptions, ontology | Hard constraints the model must follow, not interpret |
+
+### Key principle
+
+> Compiled synthesis (Lane B) guides retrieval and reasoning.  
+> Raw sources (Lane A) remain the court of appeal.  
+> Structured rules (Lane C) are authoritative constraints, not suggestions.
+
+---
+
+## Data Flow
+
+```
+User drops files in /data/raw/
+        │
+        ▼
+┌─────────────────────────┐
+│  Stage 1: Ingest         │  ← existing (csv_ingest, iris_ingest, document_ingest)
+│  Detect format, parse,   │
+│  normalize, load to DB   │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│  Stage 2: Chunk + Tag    │  ← existing (chunking.py)
+│  Split text, attach      │
+│  metadata (source, type, │    → populates Lane A index
+│  date, reliability tier) │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│  Stage 3: Compile        │  ← NEW
+│  Model reads Lane A,     │
+│  generates codex entries │    → populates Lane B index
+│  with source citations   │
+│  + extracts rules/maps   │    → populates Lane C store
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│  Stage 4: Index          │  ← extend existing
+│  Build retrieval indices │
+│  for all three lanes     │
+└─────────────────────────┘
+```
+
+### Self-reconstruction guarantee
+
+Stages 2–4 are **derived** from Stage 1 output (the database). They can be wiped and rebuilt at any time. The user's raw files in `/data/raw/` are never modified.
+
+---
+
+## Lane A — Source RAG (exists, needs extension)
+
+**What we have:** FTS5 keyword index over document chunks, accession/item/event notes.
+
+**What we need to add:**
+- Metadata tags on each chunk: `source_file`, `document_type`, `date`, `reliability_tier`
+- (Future) Vector embeddings for semantic search alongside FTS5 keyword search
+- Chunk-level provenance: file path + byte offset or line range, so any retrieved chunk can be traced back to the original file
+
+**Reliability tiers** (auto-assigned by document type):
+- `official` — accession database exports, institutional policies
+- `professional` — staff notes, propagation records, field notebooks
+- `informal` — emails, meeting notes, uncategorized documents
+- `generated` — anything produced by BEN-0 itself (Lane B codex entries)
+
+---
+
+## Lane B — Compiled Codex RAG (new)
+
+### What it is
+
+Auto-generated domain knowledge documents, each covering a single topic, each citing source evidence from Lane A.
+
+### How it's generated
+
+1. After Lane A is indexed, the compilation stage runs a series of **domain-specific extraction prompts** against the local model
+2. Each prompt targets a topic area (e.g., "IrisBG status codes", "propagation workflow", "provenance categories")
+3. The model reads relevant Lane A chunks and produces a codex entry using the template below
+4. Each entry is stored as a markdown file in `/data/codex/` and indexed into Lane B
+
+### Codex entry template
+
+```markdown
+# Topic: [auto-generated topic title]
+
+## Definition
+[What this concept/entity/rule is]
+
+## Current Working Rule
+[How this should be interpreted in practice]
+
+## Known Exceptions
+[Edge cases, historical artifacts, caveats]
+
+## Do Not Infer
+[Explicit warnings about common misinterpretations]
+
+## Source Evidence
+- [source_file:line_range] — [brief quote or summary]
+- [source_file:line_range] — [brief quote or summary]
+
+## Auto-generated
+- Generated by: [model name + version]
+- Generated from: [list of source chunk IDs]
+- Generated on: [ISO date]
+- Review status: unreviewed | approved | corrected
+```
+
+### Human override
+
+- Users can edit any codex entry. Edited entries get `review_status: corrected` and are **pinned** — the compilation stage won't overwrite them on rebuild.
+- Users can add manual codex entries (same template). These get `review_status: approved`.
+- Unreviewed auto-generated entries are always rebuilt from scratch on re-compilation.
+
+### Topic extraction strategy
+
+Rather than one monolithic "summarize everything" pass, the compiler runs **focused extraction prompts**:
+
+1. **Schema/ontology topics** — status codes, location codes, material types, provenance categories
+2. **Workflow topics** — propagation pipeline, accession lifecycle, nursery operations
+3. **Historical artifact topics** — known data quality issues, date boundary changes, recording practice shifts
+4. **Collection profile topics** — taxonomic coverage, geographic focus, conservation priorities
+
+The prompt set is extensible. New topics can be added as the domain grows.
+
+---
+
+## Lane C — Rule / Graph Layer (new)
+
+### What it is
+
+Hard-coded structured data: YAML/JSON files that encode **mappings, constraints, and known exceptions** the model must obey, not interpret.
+
+### Examples
+
+```yaml
+# rules/status_groups.yaml
+status_groups:
+  living:
+    - "Living accession"
+    - "Living accession (Cultivated)"
+    - "In cultivation"
+  dead:
+    - "Dead"
+    - "Lost"
+    - "Removed"
+  propagation:
+    - "Preparation"
+    - "Culturing"
+    - "Success"
+    - "Failure"
+    - "Observed"
+```
+
+```yaml
+# rules/date_rules.yaml
+sentinel_dates:
+  - value: "9999-12-31"
+    meaning: "No end date / still active"
+    action: "Treat as NULL, not as a real date"
+
+recording_boundaries:
+  - boundary: "~2014"
+    domain: "seed propagation"
+    note: "Before ~2014, seed accessions were often created only after germination. Failed seed lots are underrepresented."
+    implication: "Do not compare pre-2014 and post-2014 germination failure rates naively."
+```
+
+### How rules are generated
+
+**Primary method: The Institution Interview**
+
+On first run (or when rebuilding), BEN-0 conducts a guided Q&A session with the user — the same thing a visiting scholar would do on day one at a new institution:
+
+- "How does your garden track propagation status?"
+- "What does 'Success' mean in your workflow?"
+- "Are there any known gaps in your historical records?"
+- "How are accession numbers assigned?"
+
+The interview is conversational, not a form. The model asks domain-relevant questions based on what it's already seen in Lane A (the ingested data), so it can be specific: "I see 14 distinct status values in your data. Can you walk me through what these mean?"
+
+Answers are parsed into structured YAML rules and stored in `/data/rules/`. The user can review, edit, or re-run the interview at any time.
+
+**Secondary methods:**
+
+1. Some rules are **auto-extracted** during compilation (e.g., status code lists derived from actual data values)
+2. Some are **seeded from starter packs** (see "Starter Codex Packs" below)
+3. All are stored as YAML in `/data/rules/` and are **human-editable**
+4. Edited rules are pinned (same mechanism as codex entries)
+
+### At query time
+
+Rules are **injected into the prompt** when relevant, not searched semantically. The retrieval pipeline matches rule files to query topics via simple keyword/tag matching. Rules are treated as **authoritative** — the model must follow them even if they contradict a Lane A source chunk.
+
+---
+
+## Query Pipeline
+
+```
+User question
+      │
+      ▼
+┌─────────────────────────┐
+│  1. Route + Classify     │  Determine topic area, identify relevant rule files
+└───────────┬─────────────┘
+            │
+      ┌─────┴──────┬──────────────┐
+      ▼            ▼              ▼
+  Lane A        Lane B         Lane C
+  Source        Codex          Rules
+  search        search         lookup
+      │            │              │
+      └─────┬──────┘              │
+            ▼                     │
+┌─────────────────────┐           │
+│  2. Assemble Context │◄─────────┘
+│  Codex for framing   │
+│  Sources for evidence│
+│  Rules as constraints│
+└───────────┬─────────┘
+            ▼
+┌─────────────────────────┐
+│  3. Generate Draft      │  Model produces answer with citations
+└───────────┬─────────────┘
+            ▼
+┌─────────────────────────┐
+│  4. Evidence Check      │  Does the answer cite retrieved sources?
+│                         │  Do citations support the claims?
+│                         │  Any rule violations?
+└───────────┬─────────────┘
+            ▼
+┌─────────────────────────┐
+│  5. Conflict Check      │  Does codex contradict sources?
+│                         │  If yes: report conflict, don't smooth
+└───────────┬─────────────┘
+            ▼
+        Final answer
+   (with citations + confidence)
+```
+
+### Answer policy (enforced via system prompt)
+
+An answer is acceptable only when:
+1. Relevant source material was retrieved
+2. Claims are traceable to source spans
+3. Domain rules were applied consistently
+4. Known exceptions were checked
+5. Uncertainty is explicitly stated
+
+If compiled codex and raw sources conflict, the model **reports the conflict** rather than smoothing it over.
+
+---
+
+## Build Sequence
+
+### ✅ Phase R1 — Lane A improvements complete
+- Metadata fields were added to chunk/index records (`source_file`, `doc_type`, `date`, `reliability_tier`)
+- Chunk-level provenance tracking is implemented
+- FTS5 source retrieval remains in place as part of the hybrid stack
+
+### ✅ Phase R2 — Lane C rules engine complete
+- YAML rule schema is implemented
+- Rule loader and topic matcher are implemented
+- Seed rules ship with the project
+- Matched rules are injected into assistant prompts at query time
+
+### ✅ Phase R3 — Lane B codex compiler complete
+- Extraction prompt set is implemented
+- Compilation pipeline generates codex markdown from Lane A evidence
+- Codex entries are indexed for retrieval
+- Pin/override behavior is implemented for reviewed entries
+
+### ✅ Phase R4 — Vector embeddings complete
+- Local embeddings are implemented with `fastembed`
+- Hybrid retrieval combines FTS5 and vector search
+- Results are fused with reciprocal rank fusion (RRF)
+
+### ✅ Phase R5 — Evidence/conflict checking complete
+- Draft answers are checked for citation support
+- Conflict detection is implemented across sources, codex content, and rules
+- Optional LLM critic support is exposed through the `--critic` flag
+
+---
+
+## Tech Decisions (to be made)
+
+| Decision | Options | Notes |
+|----------|---------|-------|
+| **Embedding model** | sentence-transformers via Ollama, or dedicated local model | Must run on user hardware (no cloud dependency) |
+| **Vector store** | SQLite + sqlite-vss, ChromaDB, or LanceDB | Prefer SQLite-adjacent to keep single-DB simplicity |
+| **Codex compilation model** | Same local model as assistant, or separate "compiler" model | Trade-off: speed vs. quality of generated codex |
+| **Rule injection method** | Full file inject vs. relevant-section extract | Depends on typical rule file size vs. context window |
+| **Chunk size for Lane A** | Current default vs. domain-tuned sizes | Accession notes are short; policy docs are long |
+
+---
+
+## Starter Codex Packs
+
+Most botanical gardens use one of a small number of collection management systems:
+
+- **IrisBG** (our primary target)
+- **BG-BASE**
+- **PlantCol / Iris BG legacy**
+- **Specify** (more natural history, but used by some gardens)
+- **Custom / spreadsheet-based**
+
+BEN-0 can ship **pre-compiled starter codex entries and rule templates** for each supported system. These cover the common domain knowledge that's consistent across institutions using the same software (data model, standard status codes, known export quirks, field semantics).
+
+**Important caveat:** There is limited standardization in *how* individual gardens use the fields provided by the software. Two IrisBG gardens may use the same status field to mean different things. Starter packs cover the software's data model; the institution interview (Lane C) covers the institution's *interpretation* of that model.
+
+**Starter packs are a strong starting point, not a substitute for the interview.**
+
+---
+
+## Cloud Compilation (future stub)
+
+For users with API keys for cloud models (OpenAI, Anthropic, Google), BEN-0 may optionally support a `--compile-with-cloud` flag that uses a more capable model for the Lane B compilation step. This produces higher-quality codex entries without requiring powerful local hardware.
+
+**Status:** Not implemented. Architecture supports it — the compilation pipeline is model-agnostic. Leave as a future enhancement.
+
+---
+
+## Model Evolution Note
+
+We are developing with Qwen 3 8B as the base local model, but we should **not** design for the floor. Models are getting smarter and hardware is getting faster. BEN-0's first users will likely have access to more capable local models than what we test with today.
+
+Design principle: **build for the model trajectory, not just today's model.** The architecture should gracefully benefit from better models without requiring redesign.
+
+---
+
+## Platform Compatibility
+
+BEN-0 is cross-platform: Linux, macOS (Intel + Apple Silicon), Windows.
+
+All dependencies have wheels for all three platforms. No platform-specific code in the ben0 source. Tested on:
+- Ubuntu (Zotac Mini PC — development)
+- macOS (MacBook Air M4 24GB — Kevin's personal machine)
+- Windows via Git Bash (ASUS TUF — Ollama node)
+
+---
+
+## What This Is Not
+
+- **Not GraphRAG.** We're not building entity-relationship graphs (yet). The rule layer covers the structured-knowledge use case without the complexity. GraphRAG ideas may inform future work.
+- **Not a knowledge graph database.** Lane C is flat YAML files, not Neo4j. Complexity grows only when justified.
+- **Not dependent on cloud APIs.** Everything runs locally. The user never needs an API key for core functionality.
+
+---
+
+## Relationship to Existing Code
+
+| Existing module | RAG role | Changes needed |
+|----------------|----------|----------------|
+| `ingest/` | Stage 1 (unchanged) | None for RAG; ingest feeds the DB as before |
+| `retrieval/chunking.py` | Lane A chunking | Add metadata extraction during chunking |
+| `retrieval/index.py` | Lane A + B indexing | Extend to tag chunks by lane; add codex entry indexing |
+| `retrieval/search.py` | Lane A + B search | Add lane filter parameter; return provenance metadata |
+| `assistant/orchestrator.py` | Query pipeline | Major extension: multi-lane retrieval, rule injection, evidence checking |
+| `assistant/prompts.py` | Answer policy | Update system prompt with three-lane retrieval instructions |
+| (new) `compilation/` | Stage 3 | New module: codex compiler + rule extractor |
+| (new) `rules/` | Lane C data | New directory: YAML rule files |
+| (new) `data/codex/` | Lane B data | New directory: generated codex markdown files |
