@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ben0"
+version = "0.1.0"
+description = "BEN-0: Botanical Engram Node — local-first collection stewardship assistant"
+requires-python = ">=3.10"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "pandas>=2.0",
+    "click>=8.1",
+    "pytest>=7.4",
+    "streamlit>=1.30",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "faker>=24.0",
+    "openpyxl>=3.1",
+    "pymupdf>=1.24",
+    "fastembed>=0.6.0",
+    "lancedb>=0.20.0",
+    "pyarrow>=18.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov",
+]
+vectors = [
+    "fastembed>=0.6.0",
+    "lancedb>=0.20.0",
+    "pyarrow>=18.0.0",
+]
+
+[project.scripts]
+ben0 = "ben0.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
