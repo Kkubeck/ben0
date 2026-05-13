@@ -1,0 +1,30 @@
+id: provenance_codes
+name: Provenance and Establishment Code Meanings
+description: Canonical interpretation of provenance shorthand and establishment means used in garden records.
+tags:
+  - provenance
+  - origin
+  - wild
+  - garden
+  - establishment
+  - codes
+domain: provenance_management
+priority: 19
+pinned: false
+content:
+  origin_codes:
+    W: Wild origin; directly collected from a natural population.
+    Z: Wild-derived; propagated from material of wild origin.
+    G: Garden origin; obtained from cultivated or managed horticultural stock.
+    U: Unknown origin; do not treat as wild without supporting evidence.
+  establishment_means:
+    - wild_collected
+    - wild_derived
+    - cultivated
+    - garden_propagated
+    - unknown
+  interpretation_rules:
+    - Code W supports wild provenance claims.
+    - Code Z supports conservation value but is not equivalent to direct wild collection.
+    - Code G indicates cultivated lineage.
+    - Code U must remain unknown until verified.

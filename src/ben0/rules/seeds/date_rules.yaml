@@ -1,0 +1,28 @@
+id: date_rules
+name: Date Sentinel and Legacy Recording Rules
+description: Institutional rules for interpreting sentinel dates and legacy propagation-era records.
+tags:
+  - date
+  - dates
+  - sentinel
+  - propagation
+  - accession
+  - legacy
+domain: records_management
+priority: 18
+pinned: false
+content:
+  sentinel_dates:
+    no_end_date: "9999-12-31"
+    no_end_date_meaning: Treat as open-ended or still current, not as a literal far-future date.
+    blank_or_null: Preserve as unknown unless another authoritative field confirms the value.
+  legacy_boundaries:
+    seed_propagation_preaccession_before: "2014-01-01"
+    interpretation: Before this boundary, seed propagation activity may exist before a formal accession number was assigned.
+  parsing_rules:
+    preferred_output_format: YYYY-MM-DD
+    accepted_input_formats:
+      - YYYY-MM-DD
+      - M/D/YYYY
+      - MM/DD/YYYY
+    two_digit_years: Do not infer without supporting context; mark for review if ambiguous.

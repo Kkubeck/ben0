@@ -1,0 +1,37 @@
+id: status_groups
+name: Status Group Mappings
+description: How accession and living collection status values map to logical operational groups.
+tags:
+  - status
+  - accession
+  - item
+  - living
+  - dead
+  - propagation
+domain: accession_management
+priority: 20
+pinned: false
+content:
+  status_groups:
+    living:
+      - Living accession
+      - Living accession (Cultivated)
+      - In cultivation
+      - Active
+      - Established
+    dead:
+      - Dead
+      - Lost
+      - Removed
+      - Deaccessioned
+    propagation:
+      - Preparation
+      - Culturing
+      - Success
+      - Failure
+      - Observed
+      - In propagation
+    unknown:
+      - Unknown
+      - Unspecified
+      - Pending review

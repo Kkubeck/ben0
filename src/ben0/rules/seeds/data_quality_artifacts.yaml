@@ -1,0 +1,28 @@
+id: data_quality_artifacts
+name: Known IrisBG Data Quality Artifacts
+description: Known import quirks and legacy artifacts that must be normalized or treated cautiously.
+tags:
+  - irisbg
+  - import
+  - encoding
+  - dates
+  - counts
+  - legacy
+  - bgas
+domain: data_quality
+priority: 17
+pinned: false
+content:
+  artifacts:
+    bom_encoding:
+      issue: UTF-8 BOM may appear in exported CSV headers.
+      handling: Strip BOM before field matching.
+    mdyyyy_dates:
+      issue: Legacy exports often use M/D/YYYY or MM/DD/YYYY.
+      handling: Normalize to ISO format during import and rule evaluation.
+    mixed_itemspeccount_types:
+      issue: ItemSpecCount may appear as integer, decimal, blank, or free text.
+      handling: Coerce numeric values when safe; otherwise preserve raw text and flag for review.
+    legacy_bgas_inconsistencies:
+      issue: Older BG-BASE/BGAS-derived records can contain mismatched accession, item, and propagation semantics.
+      handling: Prefer current institutional rules over inferred legacy meanings and create review tickets when conflicts persist.
