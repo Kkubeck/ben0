@@ -143,7 +143,7 @@ def _post_json(url: str, payload: dict, headers: dict[str, str] | None = None) -
     request_headers = {"Content-Type": "application/json", **(headers or {})}
     req = request.Request(url, data=body, headers=request_headers, method="POST")
     try:
-        with request.urlopen(req, timeout=60) as resp:
+        with request.urlopen(req, timeout=300) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:  # pragma: no cover - depends on external services
         detail = exc.read().decode("utf-8", errors="replace")
