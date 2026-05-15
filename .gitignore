@@ -49,3 +49,4 @@ sessions/
 *.db
 .claude/
 .crd/
+embedding_cache/
