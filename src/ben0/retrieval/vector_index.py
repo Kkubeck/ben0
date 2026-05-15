@@ -38,7 +38,9 @@ def build_vector_index(
 ) -> int:
     """Build the LanceDB vector index from all indexed entries. Returns row count."""
     lancedb = _import_lancedb()
-    model = embedding_model or EmbeddingModel()
+    model = embedding_model or EmbeddingModel(
+        cache_dir=vector_dir.parent / "embedding_cache",
+    )
     vector_dir.mkdir(parents=True, exist_ok=True)
 
     entries = list(_iter_entries(session))

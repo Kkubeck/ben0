@@ -483,43 +483,53 @@ def check_sensitive_data_controls(session: Session) -> list[ValidationFinding]:
 
 
 def check_similar_unreconciled_taxa(session: Session) -> list[ValidationFinding]:
+    """Find near-duplicate taxon names that may need reconciliation.
+
+    Groups taxa by genus first, then only compares within the same genus.
+    Taxa without a genus are grouped separately and compared among themselves.
+    This reduces O(n²) over all taxa to O(sum(g²)) over genus-sized buckets.
+    """
     findings: list[ValidationFinding] = []
     taxa = session.scalars(select(Taxon)).all()
-    normalized = [
-        (
-            taxon,
-            re.sub(r"[^a-z0-9]+", " ", taxon.scientific_name.lower()).strip(),
-        )
-        for taxon in taxa
-        if taxon.scientific_name
-    ]
+
+    # Build normalized entries grouped by genus
+    genus_buckets: dict[str, list[tuple[Taxon, str]]] = {}
+    for taxon in taxa:
+        if not taxon.scientific_name:
+            continue
+        norm = re.sub(r"[^a-z0-9]+", " ", taxon.scientific_name.lower()).strip()
+        genus_key = (taxon.genus or "").strip().lower() or "_unknown_"
+        genus_buckets.setdefault(genus_key, []).append((taxon, norm))
 
     seen_pairs: set[tuple[str, str]] = set()
-    for idx, (left, left_norm) in enumerate(normalized):
-        for right, right_norm in normalized[idx + 1 :]:
-            pair = tuple(sorted((left.id, right.id)))
-            if pair in seen_pairs:
-                continue
-            seen_pairs.add(pair)
-            if left.accepted_taxon_id == right.id or right.accepted_taxon_id == left.id:
-                continue
-            ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
-            if ratio < 0.88:
-                continue
-            if left_norm == right_norm:
-                continue
-            findings.append(
-                ValidationFinding(
-                    issue_type="similar_unreconciled_taxon_names",
-                    severity="warning",
-                    entity_type="taxon",
-                    entity_id=left.id,
-                    entity_label=left.scientific_name,
-                    explanation="Taxon name is very similar to another unreconciled name in the dataset.",
-                    evidence=f"left={left.scientific_name}; right={right.scientific_name}; similarity={ratio:.2f}",
-                    recommended_action="Review whether these names are spelling variants, synonyms, or genuinely distinct taxa.",
+    for bucket in genus_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for idx, (left, left_norm) in enumerate(bucket):
+            for right, right_norm in bucket[idx + 1:]:
+                if left_norm == right_norm:
+                    continue
+                pair = tuple(sorted((left.id, right.id)))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                if left.accepted_taxon_id == right.id or right.accepted_taxon_id == left.id:
+                    continue
+                ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
+                if ratio < 0.88:
+                    continue
+                findings.append(
+                    ValidationFinding(
+                        issue_type="similar_unreconciled_taxon_names",
+                        severity="warning",
+                        entity_type="taxon",
+                        entity_id=left.id,
+                        entity_label=left.scientific_name,
+                        explanation="Taxon name is very similar to another unreconciled name in the dataset.",
+                        evidence=f"left={left.scientific_name}; right={right.scientific_name}; similarity={ratio:.2f}",
+                        recommended_action="Review whether these names are spelling variants, synonyms, or genuinely distinct taxa.",
+                    )
                 )
-            )
 
     return findings
 

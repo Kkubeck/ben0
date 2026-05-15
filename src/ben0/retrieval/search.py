@@ -2,10 +2,27 @@
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .index import FTS_TABLE
+
+# FTS5 special characters that break MATCH syntax
+_FTS5_SPECIAL = re.compile(r'["\*\(\)\{\}\[\]\^~<>\?:!@#$%&;,./\\]')
+
+
+def _sanitize_fts5_query(raw: str) -> str:
+    """Strip FTS5 metacharacters from a natural-language query.
+
+    Keeps alphanumeric tokens and simple boolean words (AND/OR/NOT)
+    that FTS5 understands. Everything else is removed or replaced
+    with spaces so the query degrades to a bag-of-words match.
+    """
+    cleaned = _FTS5_SPECIAL.sub(' ', raw)
+    # Collapse whitespace and strip
+    return ' '.join(cleaned.split())
 
 
 def search_index(
@@ -22,7 +39,7 @@ def search_index(
     if bind.dialect.name != "sqlite":
         raise RuntimeError("The prototype retrieval index currently requires SQLite/FTS5.")
 
-    cleaned_query = (query or "").strip()
+    cleaned_query = _sanitize_fts5_query(query or "")
     if not cleaned_query:
         return []
 
