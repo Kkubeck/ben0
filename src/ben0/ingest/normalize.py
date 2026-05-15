@@ -92,3 +92,23 @@ def clean_int(value) -> int | None:
         return int(value)
     except (ValueError, TypeError):
         return None
+
+
+def clean_location_code(raw: str | None) -> str | None:
+    """Extract the meaningful location code from IrisBG bed numbers.
+
+    IrisBG bed numbers use bullet (•) or middle dot (·) as separators
+    in a hierarchical format like '5•5A•' or '3·3A·3AD2'.
+    The meaningful identifier is the LAST non-empty segment.
+    """
+    if not raw:
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+
+    parts = re.split(r"[•·\u2022\u00B7]", cleaned)
+    meaningful = [part.strip() for part in parts if part.strip()]
+    if meaningful:
+        return meaningful[-1]
+    return cleaned

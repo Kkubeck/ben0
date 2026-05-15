@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +9,15 @@ from typing import Any
 
 from ben0.db.models import Accession, Event, Item, Location, Provenance, Source, Taxon
 from ben0.db.session import get_session
-from ben0.ingest.normalize import clean_int, clean_str, normalize_accession_number, parse_date, parse_year
+from ben0.ingest.encoding import read_csv_safe
+from ben0.ingest.normalize import (
+    clean_int,
+    clean_location_code,
+    clean_str,
+    normalize_accession_number,
+    parse_date,
+    parse_year,
+)
 
 ACCESSION_FILENAME = "accession_history.csv"
 ITEM_FILENAME = "accession_item_history.csv"
@@ -36,23 +43,9 @@ _STATUS_MAP = {
 }
 
 
-def _clean_header(value: str | None) -> str:
-    return str(value or "").replace("\ufeff", "").strip()
-
-
 def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]], dict[int, int]]:
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        fieldnames = [_clean_header(name) for name in (reader.fieldnames or [])]
-        reader.fieldnames = fieldnames
-
-        rows: list[dict[str, str]] = []
-        row_numbers: dict[int, int] = {}
-        for idx, row in enumerate(reader):
-            cleaned_row = {_clean_header(key): value for key, value in row.items()}
-            rows.append(cleaned_row)
-            row_numbers[idx] = idx + 2
-
+    fieldnames, rows = read_csv_safe(path)
+    row_numbers = {idx: idx + 2 for idx in range(len(rows))}
     return fieldnames, rows, row_numbers
 
 
@@ -199,13 +192,19 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
 
         location_map: dict[str, str] = {}
         for idx, row in enumerate(item_rows):
-            location_code = clean_str(_val(row, "ItemLocationCode"))
+            raw_location_code = clean_str(_val(row, "ItemLocationCode"))
+            location_code = clean_location_code(raw_location_code)
             if not location_code or location_code in location_map:
                 continue
             source_row = item_row_numbers[idx]
             location = Location(
                 location_code=location_code,
                 location_name=clean_str(_val(row, "ItemLocationName")),
+                notes=(
+                    _join_notes(("Raw location code", raw_location_code))
+                    if raw_location_code and raw_location_code != location_code
+                    else None
+                ),
                 source_file=str(item_path),
                 source_row=source_row,
             )
@@ -306,7 +305,8 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
                 continue
 
             source_row = item_row_numbers[idx]
-            location_code = clean_str(_val(row, "ItemLocationCode"))
+            raw_location_code = clean_str(_val(row, "ItemLocationCode"))
+            location_code = clean_location_code(raw_location_code)
             normalized = {
                 "accession_number": accession_number,
                 "accession_id": accession_id,
@@ -318,6 +318,7 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
                 "event_date_verbatim": _val(row, "ItemStatusDate", "ItemStatusDateFrom"),
                 "status_to": _parse_iris_date(_val(row, "ItemStatusDateTo")),
                 "location_code": location_code,
+                "location_code_raw": raw_location_code,
                 "location_id": location_map.get(location_code) if location_code else None,
                 "location_name": clean_str(_val(row, "ItemLocationName")),
                 "notes": _join_notes(
@@ -394,7 +395,7 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
                     event_date=row["event_date"],
                     event_date_verbatim=row["event_date_verbatim"],
                     location_id=row["location_id"],
-                    location_verbatim=row["location_code"] or row["location_name"],
+                    location_verbatim=row["location_code_raw"] or row["location_code"] or row["location_name"],
                     operator=row["operator"],
                     notes=row["notes"],
                     source_file=str(item_path),

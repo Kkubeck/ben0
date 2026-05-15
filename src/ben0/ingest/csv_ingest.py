@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +16,13 @@ from ben0.db.models import (
     Taxon,
 )
 from ben0.db.session import get_session
+from ben0.ingest.encoding import read_csv_safe
 from ben0.ingest.normalize import clean_int, clean_str, normalize_accession_number, parse_date, parse_year
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
+    _, rows = read_csv_safe(path)
+    return rows
 
 
 def _val(row: dict, *keys: str) -> str | None:
