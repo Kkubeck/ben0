@@ -24,7 +24,7 @@ ITEM_FILENAME = "accession_item_history.csv"
 _SENTINEL_DATES = {"12/31/9999", "9999-12-31", "9999/12/31"}
 
 _REQUIRED_ACCESSION_HEADERS = {"AccNoFull", "TaxonName", "AccYear"}
-_REQUIRED_ITEM_HEADERS = {"AccNoFull", "ItemNo", "ItemAccNoFull", "ItemStatus"}
+_REQUIRED_ITEM_HEADERS = {"AccNoFull", "ItemAccNoFull", "ItemStatus"}
 
 _ORIGIN_MAP = {
     "W": "wild",
@@ -298,6 +298,11 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
         for idx, row in enumerate(item_rows):
             accession_number = clean_str(_val(row, "AccNoFull"))
             item_number = clean_str(_val(row, "ItemNo"))
+            if not item_number:
+                # Extract from ItemAccNoFull (e.g. "1952-0001.01" → "01")
+                item_acc = clean_str(_val(row, "ItemAccNoFull")) or ""
+                if "." in item_acc:
+                    item_number = item_acc.rsplit(".", 1)[1]
             if not accession_number or not item_number:
                 continue
             accession_id = accession_map.get(accession_number)
