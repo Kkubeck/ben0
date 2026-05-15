@@ -159,7 +159,11 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
     counts: dict[str, int] = {}
     session = get_session(db_url)
     try:
-        taxon_map: dict[str, str] = {}
+        # Pre-load existing records so re-runs are idempotent
+        taxon_map: dict[str, str] = {
+            t.scientific_name: t.id for t in session.query(Taxon).all()
+        }
+        existing_taxa = len(taxon_map)
         for idx, row in enumerate(accession_rows):
             scientific_name = clean_str(_val(row, "TaxonName"))
             if not scientific_name or scientific_name in taxon_map:
@@ -188,9 +192,12 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
             session.add(taxon)
             session.flush()
             taxon_map[scientific_name] = taxon.id
-        counts["taxa"] = len(taxon_map)
+        counts["taxa"] = len(taxon_map) - existing_taxa
 
-        location_map: dict[str, str] = {}
+        location_map: dict[str, str] = {
+            loc.location_code: loc.id for loc in session.query(Location).all()
+        }
+        existing_locations = len(location_map)
         for idx, row in enumerate(item_rows):
             raw_location_code = clean_str(_val(row, "ItemLocationCode"))
             location_code = clean_location_code(raw_location_code)
@@ -211,9 +218,14 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
             session.add(location)
             session.flush()
             location_map[location_code] = location.id
-        counts["locations"] = len(location_map)
+        counts["locations"] = len(location_map) - existing_locations
 
         source_map: dict[str, str] = {}
+        for src in session.query(Source).all():
+            key = src.source_code or (src.source_name or "").lower()
+            if key:
+                source_map[key] = src.id
+        existing_sources = len(source_map)
         for idx, row in enumerate(accession_rows):
             source_name = clean_str(_val(row, "ContactNameFull"))
             source_code = clean_str(_val(row, "ContactCode"))
@@ -232,12 +244,15 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
             session.add(source)
             session.flush()
             source_map[source_key] = source.id
-        counts["sources"] = len(source_map)
+        counts["sources"] = len(source_map) - existing_sources
 
-        accession_map: dict[str, str] = {}
+        accession_map: dict[str, str] = {
+            acc.accession_number: acc.id for acc in session.query(Accession).all()
+        }
+        existing_accessions = len(accession_map)
         for idx, row in enumerate(accession_rows):
             accession_number = clean_str(_val(row, "AccNoFull"))
-            if not accession_number:
+            if not accession_number or accession_number in accession_map:
                 continue
             source_row = accession_row_numbers[idx]
             scientific_name = clean_str(_val(row, "TaxonName"))
@@ -292,7 +307,7 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
                 source_row=source_row,
             )
             session.add(provenance)
-        counts["accessions"] = len(accession_map)
+        counts["accessions"] = len(accession_map) - existing_accessions
 
         item_histories: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         for idx, row in enumerate(item_rows):
@@ -347,8 +362,18 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
             }
             item_histories[(accession_number, item_number)].append(normalized)
 
-        item_map: dict[tuple[str, str], str] = {}
-        for key, history in item_histories.items():
+        # Pre-load existing items so re-runs skip them
+        existing_item_map: dict[tuple[str, str], str] = {}
+        for item_obj in session.query(Item).all():
+            acc_obj = session.get(Accession, item_obj.accession_id)
+            if acc_obj and item_obj.item_number:
+                existing_item_map[(acc_obj.accession_number, item_obj.item_number)] = item_obj.id
+
+        item_map: dict[tuple[str, str], str] = dict(existing_item_map)
+        new_item_histories: dict[tuple[str, str], list[dict[str, Any]]] = {
+            k: v for k, v in item_histories.items() if k not in existing_item_map
+        }
+        for key, history in new_item_histories.items():
             accession_number, item_number = key
             history.sort(key=lambda row: _date_sort_key(row["event_date_verbatim"], row["source_row"]))
             current_rows = [row for row in history if row["is_current_row"]]
@@ -388,10 +413,10 @@ def ingest_iris_csvs(data_dir: Path, db_url: str | None = None) -> dict[str, int
             session.add(item)
             session.flush()
             item_map[key] = item.id
-        counts["items"] = len(item_map)
+        counts["items"] = len(item_map) - len(existing_item_map)
 
         event_count = 0
-        for history in item_histories.values():
+        for history in new_item_histories.values():
             for row in history:
                 event = Event(
                     accession_id=row["accession_id"],
