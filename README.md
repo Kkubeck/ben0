@@ -74,7 +74,7 @@ ben0 dashboard
 ben0 ask "which accessions have missing provenance?"
 ```
 
-## UBCBG / IrisBG deployment guide
+## IrisBG deployment guide
 
 BEN-0 can ingest paired IrisBG exports directly.
 
@@ -89,11 +89,11 @@ Put these in `data/raw/` (or another directory you pass to `--data-dir`):
 
 1. Copy `.env.example` to `.env`
 2. Adjust database and institution values as needed
-3. For a UBCBG deployment, uncomment or set:
+3. For a given institution deployment set:
 
 ```bash
-BEN0_INSTITUTION_NAME=UBC Botanical Garden
-BEN0_INSTITUTION_CODE=UBC
+BEN0_INSTITUTION_NAME=Miskatonic University Botanical Garden
+BEN0_INSTITUTION_CODE=MUBG
 ```
 
 ### Run
@@ -103,7 +103,7 @@ ben0 init-db
 ben0 ingest --data-dir data/raw --format iris
 ben0 validate
 ben0 index
-ben0 report --output data/exports/ubcbg_health_report.md
+ben0 report --output data/exports/mubg_health_report.md
 ```
 
 If you leave `--format` at the default `auto`, BEN-0 will detect IrisBG input when it sees `accession_history.csv`.
