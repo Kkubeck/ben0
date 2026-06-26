@@ -580,6 +580,101 @@ def report_command(output):
         click.echo(report)
 
 
+@cli.command(name="visit-gaps")
+@click.option(
+    "--threshold",
+    default=365,
+    show_default=True,
+    help="Days without a visit before a living item is flagged overdue.",
+)
+@click.option("--area", default=None, help="Filter to a single garden area (e.g. Alpine, Asian).")
+@click.option(
+    "--include-terminated",
+    is_flag=True,
+    help="Include items whose last visit event is terminal (dead/removed/etc).",
+)
+@click.option("--ghosts-only", is_flag=True, help="Show only ghost records.")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+    help="Output format.",
+)
+@click.option("--output", default=None, help="Write output to a file instead of stdout.")
+@click.option("--summary", is_flag=True, help="Area-level summary only, no per-item detail.")
+@click.option(
+    "--year-activity",
+    "show_year_activity",
+    is_flag=True,
+    help="Show year-by-year observation counts per area instead of the gap report.",
+)
+def visit_gaps_command(
+    threshold,
+    area,
+    include_terminated,
+    ghosts_only,
+    output_format,
+    output,
+    summary,
+    show_year_activity,
+):
+    """Analyze how often curators visit accession items in the collection.
+
+    Uses status-change history (Event records) as a proxy for "eyes on
+    plant" to flag items that are overdue for a visit and items that were
+    planted but never followed up on (ghosts).
+
+    Examples:
+        ben0 visit-gaps --summary
+        ben0 visit-gaps --area Alpine --threshold 730
+        ben0 visit-gaps --ghosts-only --format csv --output ghosts.csv
+        ben0 visit-gaps --area "Pacific Slope Woodland" --include-terminated
+        ben0 visit-gaps --year-activity --area Asian
+    """
+    from ben0.db.session import get_session
+    from ben0.visit_gaps import (
+        analyze_collection,
+        format_csv,
+        format_json,
+        format_table,
+        format_year_activity,
+        year_activity as compute_year_activity,
+    )
+
+    session = get_session()
+    try:
+        if show_year_activity:
+            activity = compute_year_activity(session, area_filter=area)
+            activity_format = "json" if output_format == "json" else "table"
+            rendered = format_year_activity(activity, fmt=activity_format)
+        else:
+            report = analyze_collection(session, threshold_days=threshold, area_filter=area)
+
+            if not include_terminated:
+                report.all_items = [item for item in report.all_items if item.is_living]
+
+            if ghosts_only:
+                report.all_items = report.ghost_items
+
+            if output_format == "csv":
+                rendered = format_csv(report)
+            elif output_format == "json":
+                rendered = format_json(report)
+            else:
+                rendered = format_table(report, summary=summary)
+    finally:
+        session.close()
+
+    if output:
+        with open(output, "w") as handle:
+            handle.write(rendered)
+        click.echo(f"Visit-gaps report written to {output}")
+    else:
+        click.echo(rendered)
+
+
 @cli.command(name="dashboard")
 @click.option("--port", default=8501, show_default=True, help="Streamlit server port.")
 def dashboard_command(port):
