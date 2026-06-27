@@ -92,8 +92,8 @@ Put these in `data/raw/` (or another directory you pass to `--data-dir`):
 3. For a given institution deployment set:
 
 ```bash
-BEN0_INSTITUTION_NAME=Miskatonic University Botanical Garden
-BEN0_INSTITUTION_CODE=MUBG
+BEN0_INSTITUTION_NAME=Cascadia Demonstration Botanical Garden
+BEN0_INSTITUTION_CODE=CDBG
 ```
 
 ### Run
@@ -103,7 +103,7 @@ ben0 init-db
 ben0 ingest --data-dir data/raw --format iris
 ben0 validate
 ben0 index
-ben0 report --output data/exports/mubg_health_report.md
+ben0 report --output data/exports/cdbg_health_report.md
 ```
 
 If you leave `--format` at the default `auto`, BEN-0 will detect IrisBG input when it sees `accession_history.csv`.
