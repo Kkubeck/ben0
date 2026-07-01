@@ -313,6 +313,59 @@ def index_command(skip_vectors, vectors_only):
         session.close()
 
 
+@cli.command(name="compress")
+@click.option("--level", type=click.Choice(["1", "2", "all"]), default="all", show_default=True, help="Compression level to generate.")
+@click.option(
+    "--model",
+    type=click.Choice(["mock", "gemma", "qwen", "ollama"], case_sensitive=False),
+    default=None,
+    help="Model adapter for summarization.",
+)
+@click.option("--force", is_flag=True, help="Regenerate all summaries, not just stale ones.")
+def compress_command(level, model, force):
+    """Build RAPTOR-style hierarchical summaries of ingested collection data.
+
+    Creates compressed summaries at two levels: cluster summaries (level 1)
+    group related chunks by document, and topic summaries (level 2) synthesize
+    clusters into collection-wide overviews by topic area (taxonomy, propagation,
+    provenance, conservation, operations).
+
+    Broad questions retrieve topic summaries first, then drill into raw chunks
+    for evidence. Summaries are automatically marked stale when source data changes.
+
+    Examples:
+        ben0 compress  # Build all summary levels
+        ben0 compress --level 1 --model gemma  # Cluster summaries only
+        ben0 compress --level 2  # Topic summaries from existing clusters
+        ben0 compress --force  # Rebuild everything from scratch
+    """
+    from ben0.assistant.orchestrator import _build_default_adapter
+    from ben0.db.session import get_session, init_db as _init_db
+    from ben0.retrieval.compression import compress_all
+
+    _init_db()
+    adapter = _build_model_adapter(model) if model else _build_default_adapter()
+    level_int = None if level == "all" else int(level)
+
+    session = get_session()
+    try:
+        started = time.perf_counter()
+        report = compress_all(session, adapter, level=level_int, force=force)
+        elapsed = time.perf_counter() - started
+    finally:
+        session.close()
+
+    click.echo(f"Compression complete ({elapsed:.1f}s):")
+    click.echo(f"  Level 1 (cluster) summaries created: {report.level1_created}")
+    click.echo(f"  Level 2 (topic) summaries created: {report.level2_created}")
+    click.echo(f"  Stale summaries regenerated: {report.stale_regenerated}")
+    click.echo(f"  Total chunks processed: {report.total_chunks_processed}")
+    if report.errors:
+        click.echo(f"  Errors: {len(report.errors)}")
+        for err in report.errors:
+            click.echo(f"    {err}")
+
+
 @cli.command(name="seed-rules")
 def seed_rules_command():
     """Seed authoritative rule files into the active garden workspace."""

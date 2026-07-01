@@ -62,7 +62,6 @@ class AssistantOrchestrator:
 
         session = self.session_factory()
         try:
-            registry = build_tool_registry(session, adapter=self.adapter)
             rules_dir = config._GARDEN_ROOT / "data" / "rules"
             self._last_matched_rules = match_rules(question, load_rules(rules_dir))
             system_prompt = VISITING_SCHOLAR_SYSTEM_PROMPT
@@ -70,6 +69,9 @@ class AssistantOrchestrator:
                 system_prompt = f"{format_rules_for_prompt(self._last_matched_rules)}\n\n{system_prompt}"
 
             plan = route_query(question)
+            # Map specificity to compression level: broad=2, medium=1, specific=None
+            cl = plan.compression_level if plan.compression_level > 0 else None
+            registry = build_tool_registry(session, adapter=self.adapter, compression_level=cl)
             prompt = build_initial_prompt(question, sorted(registry))
             if plan.routing_hint:
                 prompt = f"{prompt}\n\nRouting hint: {plan.routing_hint}"

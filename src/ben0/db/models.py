@@ -494,6 +494,31 @@ class SourceChunk(Base):
 
 
 # ---------------------------------------------------------------------------
+# CompressedSummary
+# ---------------------------------------------------------------------------
+
+
+class CompressedSummary(Base):
+    """A RAPTOR-style hierarchical summary of source chunks."""
+
+    __tablename__ = "compressed_summary"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+
+    compression_level: Mapped[int] = mapped_column(Integer, nullable=False)  # 1=cluster, 2=topic
+    topic_area: Mapped[str | None] = mapped_column(String(100))  # taxonomy / propagation / provenance / conservation / operations
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_count: Mapped[int | None] = mapped_column(Integer)
+    source_chunk_ids: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array
+    source_document_ids: Mapped[str | None] = mapped_column(Text)  # JSON array
+    date_range_start: Mapped[str | None] = mapped_column(String(20))
+    date_range_end: Mapped[str | None] = mapped_column(String(20))
+    generated_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# ---------------------------------------------------------------------------
 # ValidationIssue
 # ---------------------------------------------------------------------------
 

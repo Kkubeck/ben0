@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from ben0.db.models import CompressedSummary
 from .embeddings import EmbeddingModel
 from .search import search_index
 from .vector_index import search_vector_index, vector_index_exists
@@ -29,6 +30,7 @@ def hybrid_search(
     source_type: str | None = None,
     lane: str | None = None,
     document_type: str | None = None,
+    compression_level: int | None = None,
 ) -> list[dict]:
     """Hybrid search combining FTS5 keyword + vector semantic results via RRF."""
     fts_results = search_index(
@@ -82,6 +84,36 @@ def hybrid_search(
         row.setdefault("snippet", None)
         row["rrf_score"] = rrf_scores[chunk_id]
         results.append(row)
+
+    # Merge compressed summaries when requested
+    if compression_level is not None and compression_level > 0:
+        compressed = (
+            session.query(CompressedSummary)
+            .filter(
+                CompressedSummary.compression_level == compression_level,
+                CompressedSummary.is_stale == False,
+            )
+            .all()
+        )
+        for cs in compressed:
+            # Simple keyword match for relevance
+            query_lower = query.lower()
+            text_lower = cs.summary_text.lower()
+            query_terms = query_lower.split()
+            match_score = sum(1 for t in query_terms if t in text_lower) / max(len(query_terms), 1)
+            if match_score > 0.2:
+                results.append({
+                    "chunk_id": cs.id,
+                    "snippet": cs.summary_text,
+                    "document_name": f"[compressed:{cs.topic_area}]",
+                    "rrf_score": match_score,
+                    "compression_level": cs.compression_level,
+                    "topic_area": cs.topic_area,
+                })
+        # Re-sort by score after adding compressed results
+        results.sort(key=lambda r: r.get("rrf_score", 0), reverse=True)
+        results = results[:limit]
+
     return results
 
 

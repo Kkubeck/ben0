@@ -43,9 +43,21 @@ def _parse_query_filters(query_or_filters: str | dict[str, Any]) -> dict[str, An
     return filters
 
 
-def search_documents(session: Session, query: str, limit: int = 5, use_hybrid: bool = False) -> dict[str, Any]:
+def search_documents(
+    session: Session,
+    query: str,
+    limit: int = 5,
+    use_hybrid: bool = False,
+    compression_level: int | None = None,
+) -> dict[str, Any]:
     if use_hybrid:
-        results = hybrid_search(session, query, config._GARDEN_ROOT / "data" / "vector", limit=limit)
+        results = hybrid_search(
+            session,
+            query,
+            config._GARDEN_ROOT / "data" / "vector",
+            limit=limit,
+            compression_level=compression_level,
+        )
     else:
         results = search_index(session, query, limit=limit)
     return {
@@ -382,9 +394,13 @@ def query_database(session: Session, adapter: Any, question: str, rules: list[st
     return format_sql_results(results, question, sql)
 
 
-def build_tool_registry(session: Session, adapter: Any = None) -> dict[str, Any]:
+def build_tool_registry(
+    session: Session, adapter: Any = None, compression_level: int | None = None
+) -> dict[str, Any]:
     registry = {
-        "search_documents": lambda **kwargs: search_documents(session, **kwargs),
+        "search_documents": lambda **kwargs: search_documents(
+            session, compression_level=compression_level, **kwargs
+        ),
         "search_records": lambda **kwargs: search_records(
             session,
             kwargs.pop("query_or_filters", kwargs.pop("query", "")),
