@@ -10,8 +10,15 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ben0 import config
+from ben0.assistant.text_to_sql import (
+    execute_safe_query,
+    format_sql_results,
+    generate_schema_description,
+    generate_sql,
+)
 from ben0.dashboard.metrics import calculate_metrics
 from ben0.db.models import Accession, CorrectionTicket, Event, Item, Taxon, ValidationIssue, Provenance
+from ben0.db.session import get_engine
 from ben0.reports.markdown_report import generate_markdown_report
 from ben0.retrieval.hybrid_search import hybrid_search
 from ben0.retrieval.search import search_index
@@ -366,8 +373,17 @@ def generate_data_quality_report(session: Session, output_path: str | Path | Non
     }
 
 
-def build_tool_registry(session: Session) -> dict[str, Any]:
-    return {
+def query_database(session: Session, adapter: Any, question: str, rules: list[str] | None = None) -> dict[str, Any]:
+    """Convert a natural-language question to SQL, execute it, and return results."""
+    engine = get_engine()
+    schema = generate_schema_description(engine)
+    sql = generate_sql(adapter, question, schema, rules=rules)
+    results = execute_safe_query(engine, sql)
+    return format_sql_results(results, question, sql)
+
+
+def build_tool_registry(session: Session, adapter: Any = None) -> dict[str, Any]:
+    registry = {
         "search_documents": lambda **kwargs: search_documents(session, **kwargs),
         "search_records": lambda **kwargs: search_records(
             session,
@@ -383,3 +399,8 @@ def build_tool_registry(session: Session) -> dict[str, Any]:
         "generate_data_quality_report": lambda **kwargs: generate_data_quality_report(session, **kwargs),
         "generate_dashboard_data": lambda **kwargs: {"tool": "generate_dashboard_data", "data": calculate_metrics(session)},
     }
+    if adapter is not None:
+        registry["query_database"] = lambda **kwargs: query_database(
+            session, adapter, kwargs.pop("question", kwargs.pop("query", "")), kwargs.get("rules"),
+        )
+    return registry

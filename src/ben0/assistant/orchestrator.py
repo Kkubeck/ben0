@@ -19,6 +19,7 @@ from ben0.assistant.evidence_check import (
 from ben0.assistant.model_adapters import MockModelAdapter, OllamaAdapter, OpenAICompatibleAdapter
 from ben0.assistant.persona import VISITING_SCHOLAR_SYSTEM_PROMPT
 from ben0.assistant.prompts import build_initial_prompt, build_tool_result_prompt
+from ben0.assistant.query_router import route_query
 from ben0.assistant.tools import build_tool_registry
 from ben0.db.session import get_session
 from ben0.rules.inject import format_rules_for_prompt
@@ -61,13 +62,17 @@ class AssistantOrchestrator:
 
         session = self.session_factory()
         try:
-            registry = build_tool_registry(session)
+            registry = build_tool_registry(session, adapter=self.adapter)
             rules_dir = config._GARDEN_ROOT / "data" / "rules"
             self._last_matched_rules = match_rules(question, load_rules(rules_dir))
             system_prompt = VISITING_SCHOLAR_SYSTEM_PROMPT
             if self._last_matched_rules:
                 system_prompt = f"{format_rules_for_prompt(self._last_matched_rules)}\n\n{system_prompt}"
+
+            plan = route_query(question)
             prompt = build_initial_prompt(question, sorted(registry))
+            if plan.routing_hint:
+                prompt = f"{prompt}\n\nRouting hint: {plan.routing_hint}"
             last_result: dict[str, Any] | None = None
 
             for _ in range(4):
