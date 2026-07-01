@@ -90,7 +90,7 @@ def test_build_index_populates_r1_metadata(tmp_path: Path):
         seeded = _seed_records(session)
 
         count = build_index(session)
-        assert count == 5
+        assert count == 13
 
         rows = session.execute(
             text(
@@ -116,7 +116,7 @@ def test_build_index_populates_r1_metadata(tmp_path: Path):
         assert by_source_type["document_chunk"]["source_file_path"] == "/imports/policy.txt"
         assert by_source_type["event_note"]["date"] == "2006-05-01"
         assert by_source_type["item_note"]["date"] == "2006-04-01"
-        assert {row["lane"] for row in rows} == {"A"}
+        assert {row["lane"] for row in rows} == {"A", "B"}
     finally:
         session.close()
         reset_singletons()
