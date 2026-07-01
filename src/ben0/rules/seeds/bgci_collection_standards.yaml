@@ -1,0 +1,61 @@
+id: bgci_collection_standards
+name: BGCI Collection Management Standards
+description: >
+  Baseline standards from Botanic Gardens Conservation International for living
+  collection management. These represent broad community consensus, not
+  prescriptions. Local practice may justifiably diverge.
+tags:
+  - bgci
+  - standards
+  - accreditation
+  - collection
+  - baseline
+  - external
+domain: collection_management
+priority: 5
+pinned: false
+content:
+  source: BGCI / International Agenda for Botanic Gardens in Conservation
+  nature: >
+    External reference baseline. These standards describe what the global
+    botanic garden community has broadly agreed on. They are context for
+    local decision-making, not mandates. When local practice differs from
+    these standards, report the divergence as information, not as an error.
+  minimum_record_requirements:
+    - field: accession_number
+      requirement: Unique identifier for each acquisition event.
+    - field: taxon_name
+      requirement: Scientific name at time of accession, ideally with authority.
+    - field: provenance
+      requirement: Wild / garden / unknown origin, with locality data for wild-collected material.
+    - field: acquisition_date
+      requirement: Date material was received or collected.
+    - field: acquisition_source
+      requirement: Donor institution, collector, or exchange programme.
+    - field: material_type
+      requirement: Seed, cutting, plant, division, or other propagule type.
+    - field: verification_status
+      requirement: Whether the taxonomic identification has been verified and by whom.
+  collection_policy_elements:
+    - element: geographic_scope
+      description: Defined geographic or taxonomic focus for the collection.
+    - element: conservation_priorities
+      description: Explicit criteria for prioritizing threatened or regionally significant taxa.
+    - element: deaccessioning_policy
+      description: Criteria and process for removing material from the collection.
+    - element: duplication_policy
+      description: Target number of individuals per accession for collection security.
+    - element: wild_collection_ethics
+      description: Adherence to CBD, Nagoya Protocol, and national collecting regulations.
+  accreditation_indicators:
+    - Plants are labeled with scientific names and accession numbers.
+    - A documented collection policy exists and is reviewed periodically.
+    - Records are maintained in a database or structured system.
+    - Conservation-relevant taxa are identified and prioritized.
+    - Staff or volunteers with botanical/horticultural training manage the collection.
+    - The garden participates in plant conservation networks or seed banks.
+  interpretation_rules:
+    - These standards represent BGCI community consensus as of the International Agenda (2000, updated 2012).
+    - Not all gardens meet all criteria. Many excellent conservation programmes operate outside formal accreditation.
+    - Absence of a formal collection policy does not mean absence of collection discipline.
+    - When comparing local practice to these standards, frame divergences as decision points, not deficiencies.

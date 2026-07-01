@@ -1,0 +1,75 @@
+id: bgci_data_sharing
+name: BGCI Data Sharing and Exchange Standards
+description: >
+  Standards for inter-garden data exchange, IPEN compliance, and alignment
+  with biodiversity data platforms. External reference baseline.
+tags:
+  - bgci
+  - ipen
+  - data_sharing
+  - darwin_core
+  - gbif
+  - abs
+  - baseline
+  - external
+domain: data_sharing
+priority: 5
+pinned: false
+content:
+  source: BGCI / IPEN / Darwin Core / Nagoya Protocol
+  nature: >
+    External reference baseline for data interoperability and legal
+    compliance. Darwin Core and IPEN represent functional consensus
+    among gardens that share data internationally. Gardens that do not
+    share data externally may not need full compliance, but alignment
+    simplifies future participation.
+  ipen_code_of_conduct:
+    purpose: >
+      International Plant Exchange Network. Facilitates non-commercial
+      exchange of living plant material between botanic gardens while
+      complying with the Convention on Biological Diversity and
+      Nagoya Protocol on Access and Benefit Sharing.
+    key_requirements:
+      - An IPEN number accompanies each plant or propagule exchanged.
+      - Material is for non-commercial use (research, conservation, education, display).
+      - Benefit-sharing obligations follow the material through successive transfers.
+      - Gardens maintain records of incoming and outgoing material with IPEN numbers.
+    ipen_number_format: >
+      Country code + garden code + year + sequential number
+      (e.g., XX-0-YYYY-NNNN). The IPEN number is NOT the same as the
+      accession number. Gardens that use IrisBG may store IPEN numbers
+      in a separate field or in accession notes.
+  darwin_core_alignment:
+    purpose: >
+      Standard vocabulary for sharing biodiversity data via GBIF and
+      other aggregators. Not required for internal collection management,
+      but alignment reduces friction when contributing data externally.
+    key_mappings:
+      - garden_field: accession_number
+        dwc_term: catalogNumber
+      - garden_field: scientific_name
+        dwc_term: scientificName
+      - garden_field: provenance_origin
+        dwc_term: establishmentMeans
+      - garden_field: collection_locality
+        dwc_term: locality
+      - garden_field: collection_date
+        dwc_term: eventDate
+      - garden_field: collector
+        dwc_term: recordedBy
+  locality_sensitivity:
+    principle: >
+      Exact localities for threatened species may need to be withheld
+      or generalized before sharing. This is a legitimate conservation
+      practice, not a data quality problem. GBIF supports
+      dataGeneralizations and informationWithheld fields for this purpose.
+    guidelines:
+      - CITES Appendix I species: consider withholding precise coordinates.
+      - Nationally listed species: follow national guidance on locality disclosure.
+      - Culturally significant sites: respect Indigenous data sovereignty agreements.
+      - Poaching-risk species: generalize to region or protected area level.
+  interpretation_rules:
+    - IPEN membership is voluntary. Many gardens exchange material bilaterally without IPEN.
+    - Darwin Core alignment is valuable for external sharing but should not distort internal data models.
+    - Locality sensitivity decisions are local and context-dependent. No universal threshold exists.
+    - When local sharing policy differs from these guidelines, document the rationale in Lane C rules.

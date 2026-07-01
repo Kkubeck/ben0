@@ -356,6 +356,26 @@ For users with API keys for cloud models (OpenAI, Anthropic, Google), BEN-0 may 
 
 ---
 
+## Knowledge Philosophy: Justified Local Optimum
+
+BEN-0 does not prescribe "best practice." In horticulture, best practice is largely consensus derived from a few high-prestige institutions, codified by bodies like BGCI, and adopted by smaller gardens because accreditation requires it, not because it was validated locally. That process flattens out the local adaptation that practitioners do every day but rarely document.
+
+BEN-0 operates on a different principle: **the right answer for a garden is a justified local optimum, not a global prescription.**
+
+This means:
+
+1. **External standards are reference, not authority.** BGCI technical standards, IPEN protocols, Darwin Core vocabulary, and published research (Lane C seed rules) represent what the broader community has agreed on. Ben0 surfaces them as context, not commands. They answer "what do others do?" not "what should you do?"
+
+2. **Local knowledge is primary.** The institution interview, ingested documents, propagation outcomes, and curator-edited rules capture what THIS garden actually does. The gap between local practice and external standards is not a deficiency to correct. It is institutional knowledge, often the most valuable kind, and usually trapped in one person's head.
+
+3. **Ben0 surfaces the decision space, not the decision.** When asked about propagation timing, collection priorities, or data management, ben0 should present: what the local records show, what external standards say, what comparable gardens report (when available), and where these diverge. The curator decides.
+
+4. **Conflicts are signal, not noise.** When Lane A sources contradict Lane C rules, or when local practice diverges from BGCI standards, ben0 reports the conflict. It does not smooth it over, pick a winner, or suggest the external standard is "correct."
+
+This philosophy is already encoded in the architecture: Lane C rules are authoritative constraints about data interpretation (what status codes mean, what sentinel dates are), not horticultural prescriptions. The evidence checker reports conflicts rather than resolving them. The interview captures local interpretation rather than imposing external templates. The starter packs cover software data models, not institutional practice.
+
+---
+
 ## Model Evolution Note
 
 We are developing with Qwen 3 8B as the base local model, but we should **not** design for the floor. Models are getting smarter and hardware is getting faster. BEN-0's first users will likely have access to more capable local models than what we test with today.

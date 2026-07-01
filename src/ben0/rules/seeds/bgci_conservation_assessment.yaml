@@ -1,0 +1,81 @@
+id: bgci_conservation_assessment
+name: BGCI Conservation Value Assessment Framework
+description: >
+  Framework for assessing the conservation value of living collections,
+  drawn from BGCI guidance and Brockington et al. 2025. External
+  reference baseline for collection evaluation.
+tags:
+  - bgci
+  - conservation
+  - assessment
+  - iucn
+  - threatened
+  - provenance
+  - baseline
+  - external
+domain: conservation
+priority: 5
+pinned: false
+content:
+  source: BGCI / Brockington et al. 2025 (Nature Ecology & Evolution)
+  nature: >
+    External reference baseline for evaluating conservation significance
+    of living collections. These metrics represent published research
+    consensus. Local gardens may weight metrics differently based on
+    their mandate.
+  conservation_value_indicators:
+    - indicator: threatened_taxa_holdings
+      description: >
+        Count and proportion of holdings with IUCN Red List status
+        VU, EN, CR, or EW. Higher proportion indicates greater
+        conservation relevance.
+      benchmark: >
+        Brockington 2025 median across 50 gardens: ~8% of taxa are
+        IUCN-assessed threatened. Wide variation by garden mandate.
+    - indicator: wild_provenance_ratio
+      description: >
+        Proportion of accessions with documented wild origin (W or Z
+        provenance codes). Wild-origin material has higher conservation
+        genetic value than garden-sourced material.
+      benchmark: >
+        Highly variable. Research-focused gardens may exceed 60%.
+        Display-focused gardens may be below 20%. Neither is wrong;
+        they reflect different mandates.
+    - indicator: geographic_representation
+      description: >
+        Breadth of collection localities relative to the garden's
+        stated geographic scope. Gaps indicate under-represented regions.
+    - indicator: taxonomic_uniqueness
+      description: >
+        Taxa held by few or no other gardens (based on BGCI PlantSearch
+        or regional surveys). Unique holdings carry higher conservation
+        responsibility.
+    - indicator: collection_security
+      description: >
+        Number of living individuals per accession. Single-individual
+        accessions are vulnerable to loss. Target varies by taxon
+        biology and space constraints.
+    - indicator: documentation_completeness
+      description: >
+        Proportion of accessions with provenance, collector, locality,
+        and verification data. Undocumented material has limited
+        conservation utility regardless of its biological value.
+  survival_analysis:
+    context: >
+      Brockington et al. 2025 found median accession survival across
+      50 global gardens is approximately 15 years. This is a descriptive
+      finding, not a target. Short-lived accessions are not failures;
+      they may reflect intentional rotation, propagation programmes,
+      or biological lifespan.
+    local_interpretation: >
+      Compare local survival curves to the published median as context,
+      not as a benchmark to meet. Nursery pipeline accessions
+      (propagation material that was never intended for permanent
+      display) will skew survival statistics downward. Filter these
+      before comparing to published figures.
+  interpretation_rules:
+    - Conservation value is multi-dimensional. No single metric captures it.
+    - A garden with 5% threatened taxa and excellent provenance documentation may contribute more to conservation than one with 20% threatened taxa and no locality data.
+    - Wild provenance is more valuable for conservation genetics, but garden-sourced material serves education and display mandates legitimately.
+    - Benchmarks from Brockington 2025 are descriptive medians across diverse institutions, not targets.
+    - When local metrics diverge from published benchmarks, the question is "why" not "how do we fix this."
