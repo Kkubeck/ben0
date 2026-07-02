@@ -633,6 +633,66 @@ def report_command(output):
         click.echo(report)
 
 
+@cli.command(name="report-card")
+@click.option("--output", default=None, help="Write report to a file.")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["markdown", "json", "both"]),
+    default="markdown",
+    show_default=True,
+)
+@click.option("--json-output", default=None, help="Separate JSON output path (only with --format both).")
+def report_card_command(output, output_format, json_output):
+    """Generate a Collection Biodiversity Report Card.
+
+    Comprehensive self-assessment of the living collection's biodiversity
+    value, representativeness, and resilience across eight dimensions:
+    taxonomic diversity, conservation value, provenance quality, collection
+    security, collection dynamics, climate readiness, nursery pipeline
+    performance, and data integrity.
+
+    Each section receives a traffic-light rating (strong / adequate /
+    needs attention) with supporting metrics and findings.
+
+    Examples:
+        ben0 report-card
+        ben0 report-card --output annual_assessment.md
+        ben0 report-card --format json --output card.json
+        ben0 report-card --format both --output card.md --json-output card.json
+    """
+    from ben0 import config
+    from ben0.db.session import get_session, init_db as _init_db
+    from ben0.reports.report_card import generate_report_card, render_markdown
+
+    _init_db()
+    garden_name = config.get_active_garden() or config.INSTITUTION_NAME
+    session = get_session()
+    try:
+        card = generate_report_card(session, garden_name=garden_name)
+    finally:
+        session.close()
+
+    if output_format in ("markdown", "both"):
+        md = render_markdown(card)
+        if output:
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            Path(output).write_text(md, encoding="utf-8")
+            click.echo(f"Report card written to {output}")
+        else:
+            click.echo(md)
+
+    if output_format in ("json", "both"):
+        json_str = card.to_json()
+        json_path = json_output or (output.replace(".md", ".json") if output else None)
+        if json_path:
+            Path(json_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(json_path).write_text(json_str, encoding="utf-8")
+            click.echo(f"Report card JSON written to {json_path}")
+        elif output_format == "json":
+            click.echo(json_str)
+
+
 @cli.command(name="visit-gaps")
 @click.option(
     "--threshold",
