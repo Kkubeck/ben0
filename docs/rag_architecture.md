@@ -1,7 +1,7 @@
 # BEN-0 RAG Architecture
 
-**Status:** Implemented — R1 through R5 complete (May 12, 2026)  
-**Last updated:** 2026-05-12  
+**Status:** Implemented — R1 through R7 complete (Jul 2, 2026)  
+**Last updated:** 2026-07-02  
 **Authors:** Kevin Kubeck, Dewey
 
 ---
@@ -15,29 +15,32 @@ The entire RAG pipeline must be **self-bootstrapping**: drop institutional data 
 
 ---
 
-## Three-Lane RAG
+## Four-Lane RAG
 
-At query time, BEN-0 retrieves from three lanes simultaneously:
+At query time, BEN-0 retrieves from four lanes:
 
 ```
 Lane A: Source RAG           — "What does the original material say?"
 Lane B: Compiled Codex RAG   — "What is our interpreted domain model?"
 Lane C: Rule / Graph Layer   — "What constraints and mappings are authoritative?"
+Lane D: Structured Query     — "What do the numbers say?"
 ```
 
-### Why three lanes?
+### Why four lanes?
 
 | Lane | What it holds | Why it exists |
 |------|--------------|---------------|
 | **A — Source** | Chunked raw documents with metadata | Preserves original nuance; court of appeal for any claim |
 | **B — Codex** | Auto-generated domain summaries with source citations | Gives the local model orientation; compensates for small context windows |
 | **C — Rules** | Structured YAML/JSON: status mappings, date rules, known exceptions, ontology | Hard constraints the model must follow, not interpret |
+| **D — Structured Query** | Text-to-SQL against the collection database | Answers quantitative/aggregate questions that retrieval cannot |
 
 ### Key principle
 
 > Compiled synthesis (Lane B) guides retrieval and reasoning.  
 > Raw sources (Lane A) remain the court of appeal.  
-> Structured rules (Lane C) are authoritative constraints, not suggestions.
+> Structured rules (Lane C) are authoritative constraints, not suggestions.  
+> Structured queries (Lane D) provide quantitative evidence that retrieval cannot.
 
 ---
 
@@ -316,6 +319,22 @@ If compiled codex and raw sources conflict, the model **reports the conflict** r
 - Conflict detection is implemented across sources, codex content, and rules
 - Optional LLM critic support is exposed through the `--critic` flag
 
+### ✅ Phase R6 — Lane D (text-to-SQL) + RAPTOR compression (Jul 1, 2026)
+- Text-to-SQL converts natural language to SELECT queries with safety validation
+- Query router classifies questions by type (sql/rag/hybrid) and specificity (specific/medium/broad)
+- RAPTOR-style compression builds hierarchical summaries: cluster (Level 1) and topic (Level 2)
+- `ben0 compress` CLI command generates and manages summary hierarchy
+- Compressed summaries integrated into hybrid search with compression_level routing
+- Staleness tracking marks summaries for regeneration when source data changes
+
+### ✅ Phase R7 — Hybrid integration + BGCI baseline (Jul 2, 2026)
+- Hybrid pre-fetch: orchestrator proactively runs both SQL and document search for hybrid queries
+- Combined prompt assembly feeds numbers + narrative to the LLM in one pass
+- Per-row SQL citations enable evidence tracking for structured query results
+- Lane D results tracked as `lane: "D"` with `reliability_tier: "official"`
+- BGCI external baseline seed rules: collection standards, data sharing/IPEN, conservation assessment
+- Knowledge philosophy documented: "justified local optimum" design principle
+
 ---
 
 ## Tech Decisions (to be made)
@@ -397,7 +416,7 @@ All dependencies have wheels for all three platforms. No platform-specific code 
 
 ## What This Is Not
 
-- **Not GraphRAG.** We're not building entity-relationship graphs (yet). The rule layer covers the structured-knowledge use case without the complexity. GraphRAG ideas may inform future work.
+- **Not GraphRAG yet.** We evaluated multi-dimensional knowledge graphs (Jul 2026) and determined that RAPTOR compression + text-to-SQL + query routing provides sufficient coverage for single-garden use without the implementation complexity. Compressed summaries with topic/temporal metadata provide dimensional separation. SQL JOINs traverse entity relationships. The graph remains the right long-term architecture for multi-garden federation, and RAPTOR nodes are designed to become graph nodes when that need arises.
 - **Not a knowledge graph database.** Lane C is flat YAML files, not Neo4j. Complexity grows only when justified.
 - **Not dependent on cloud APIs.** Everything runs locally. The user never needs an API key for core functionality.
 

@@ -246,11 +246,16 @@ def format_sql_results(
     sql: str,
 ) -> dict[str, Any]:
     """Wrap query results in the standard tool registry dict format."""
+    annotated = []
+    for i, row in enumerate(results[:100]):
+        row_copy = dict(row)
+        row_copy["citation"] = f"query_database:row_{i}"
+        annotated.append(row_copy)
     return {
         "tool": "query_database",
         "question": question,
         "sql": sql,
         "row_count": len(results),
-        "results": results[:100],
+        "results": annotated,
         "citation": "query_database:sql",
     }

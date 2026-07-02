@@ -18,7 +18,7 @@ from ben0.assistant.evidence_check import (
 )
 from ben0.assistant.model_adapters import MockModelAdapter, OllamaAdapter, OpenAICompatibleAdapter
 from ben0.assistant.persona import VISITING_SCHOLAR_SYSTEM_PROMPT
-from ben0.assistant.prompts import build_initial_prompt, build_tool_result_prompt
+from ben0.assistant.prompts import build_hybrid_prompt, build_initial_prompt, build_tool_result_prompt
 from ben0.assistant.query_router import route_query
 from ben0.assistant.tools import build_tool_registry
 from ben0.db.session import get_session
@@ -72,9 +72,24 @@ class AssistantOrchestrator:
             # Map specificity to compression level: broad=2, medium=1, specific=None
             cl = plan.compression_level if plan.compression_level > 0 else None
             registry = build_tool_registry(session, adapter=self.adapter, compression_level=cl)
-            prompt = build_initial_prompt(question, sorted(registry))
-            if plan.routing_hint:
-                prompt = f"{prompt}\n\nRouting hint: {plan.routing_hint}"
+            pre_fetched: dict[str, Any] | None = None
+            if plan.query_type == "hybrid" and self.adapter is not None:
+                pre_fetched = self._hybrid_prefetch(session, question, registry)
+                if pre_fetched:
+                    for result in pre_fetched.values():
+                        self._capture_retrieved_chunks(result)
+            if pre_fetched:
+                prompt = build_hybrid_prompt(
+                    question,
+                    sorted(registry),
+                    sql_result=pre_fetched.get("sql"),
+                    doc_result=pre_fetched.get("documents"),
+                    routing_hint=plan.routing_hint,
+                )
+            else:
+                prompt = build_initial_prompt(question, sorted(registry))
+                if plan.routing_hint:
+                    prompt = f"{prompt}\n\nRouting hint: {plan.routing_hint}"
             last_result: dict[str, Any] | None = None
 
             for _ in range(4):
@@ -355,6 +370,21 @@ class AssistantOrchestrator:
                         "lane": row.get("lane"),
                     }
                 )
+        # Handle SQL query results (no chunk_id, but have citation)
+        if result.get("tool") == "query_database":
+            for row in result.get("results", []):
+                if not isinstance(row, dict):
+                    continue
+                extracted.append({
+                    "chunk_id": row.get("citation", "query_database"),
+                    "citation": row.get("citation"),
+                    "document_name": "query_database",
+                    "source_type": "sql_result",
+                    "snippet": str(row),
+                    "text": str(row),
+                    "reliability_tier": "official",
+                    "lane": "D",
+                })
         return extracted
 
     def _row_text(self, key: str, row: dict[str, Any]) -> str:
@@ -437,6 +467,23 @@ class AssistantOrchestrator:
             "I gathered evidence, but I could not turn it into a confident narrative answer.",
             result,
         )
+
+
+    def _hybrid_prefetch(self, session: Any, question: str, registry: dict) -> dict[str, Any] | None:
+        results: dict[str, Any] = {}
+        # SQL leg
+        if "query_database" in registry:
+            try:
+                results["sql"] = registry["query_database"](question=question)
+            except Exception:
+                pass
+        # Document leg
+        if "search_documents" in registry:
+            try:
+                results["documents"] = registry["search_documents"](query=question, limit=5, use_hybrid=True)
+            except Exception:
+                pass
+        return results if results else None
 
 
 def _build_default_adapter() -> Any:
