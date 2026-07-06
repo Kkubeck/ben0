@@ -28,15 +28,21 @@ UNCERTAINTY_GUIDANCE = (
 )
 
 
-def build_initial_prompt(question: str, tool_names: list[str]) -> str:
-    tools = ", ".join(tool_names)
-    return (
-        f"Available tools: {tools}\n"
-        f"{TOOL_FORMAT_GUIDANCE}\n"
-        f"{CITATION_GUIDANCE}\n"
-        f"{UNCERTAINTY_GUIDANCE}\n"
-        f"Question: {question}"
-    )
+def build_initial_prompt(
+    question: str,
+    tool_names: list[str],
+    recent_conversation: str = "",
+) -> str:
+    parts = [
+        f"Available tools: {', '.join(tool_names)}",
+        TOOL_FORMAT_GUIDANCE,
+        CITATION_GUIDANCE,
+        UNCERTAINTY_GUIDANCE,
+    ]
+    if recent_conversation:
+        parts.append(recent_conversation)
+    parts.append(f"Question: {question}")
+    return "\n\n".join(parts)
 
 
 def build_hybrid_prompt(
@@ -45,11 +51,14 @@ def build_hybrid_prompt(
     sql_result: dict[str, Any] | None = None,
     doc_result: dict[str, Any] | None = None,
     routing_hint: str = "",
+    recent_conversation: str = "",
 ) -> str:
     parts = [f"Available tools: {', '.join(tool_names)}"]
     parts.append(TOOL_FORMAT_GUIDANCE)
     parts.append(CITATION_GUIDANCE)
     parts.append(UNCERTAINTY_GUIDANCE)
+    if recent_conversation:
+        parts.append(recent_conversation)
 
     if sql_result:
         sql_summary = json.dumps(sql_result, ensure_ascii=False, indent=2, default=str)
@@ -77,12 +86,17 @@ def build_tool_result_prompt(
     tool_name: str,
     arguments: dict[str, Any],
     result: Any,
+    recent_conversation: str = "",
 ) -> str:
-    return (
+    parts = []
+    if recent_conversation:
+        parts.append(recent_conversation)
+    parts.append(
         f"Question: {question}\n"
         f"Tool used: {tool_name}\n"
         f"Tool arguments: {json.dumps(arguments, ensure_ascii=False, sort_keys=True)}\n"
-        f"TOOL_RESULT:\n{json.dumps(result, ensure_ascii=False, indent=2, default=str)}\n"
-        f"{CITATION_GUIDANCE}\n"
-        "Respond with FINAL: ..."
+        f"TOOL_RESULT:\n{json.dumps(result, ensure_ascii=False, indent=2, default=str)}"
     )
+    parts.append(CITATION_GUIDANCE)
+    parts.append("Respond with FINAL: ...")
+    return "\n\n".join(parts)

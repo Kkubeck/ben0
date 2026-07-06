@@ -26,7 +26,7 @@ from ben0.rules.inject import format_rules_for_prompt
 from ben0.rules.loader import load_rules
 from ben0.rules.matcher import match_rules
 from ben0.rules.schema import RuleFile
-from ben0.session import Session, SessionManager
+from ben0.session import ConversationTurn, Session, SessionManager
 
 
 @dataclass(slots=True)
@@ -67,6 +67,7 @@ class AssistantOrchestrator:
             system_prompt = VISITING_SCHOLAR_SYSTEM_PROMPT
             if self._last_matched_rules:
                 system_prompt = f"{format_rules_for_prompt(self._last_matched_rules)}\n\n{system_prompt}"
+            recent_conversation = self._recent_conversation_block(question)
 
             plan = route_query(question)
             # Map specificity to compression level: broad=2, medium=1, specific=None
@@ -85,9 +86,14 @@ class AssistantOrchestrator:
                     sql_result=pre_fetched.get("sql"),
                     doc_result=pre_fetched.get("documents"),
                     routing_hint=plan.routing_hint,
+                    recent_conversation=recent_conversation,
                 )
             else:
-                prompt = build_initial_prompt(question, sorted(registry))
+                prompt = build_initial_prompt(
+                    question,
+                    sorted(registry),
+                    recent_conversation=recent_conversation,
+                )
                 if plan.routing_hint:
                     prompt = f"{prompt}\n\nRouting hint: {plan.routing_hint}"
             last_result: dict[str, Any] | None = None
@@ -105,7 +111,13 @@ class AssistantOrchestrator:
                     arguments = parsed.arguments or {}
                     last_result = tool(**arguments)
                     self._capture_retrieved_chunks(last_result)
-                    prompt = build_tool_result_prompt(question, parsed.tool_name, arguments, last_result)
+                    prompt = build_tool_result_prompt(
+                        question,
+                        parsed.tool_name,
+                        arguments,
+                        last_result,
+                        recent_conversation=recent_conversation,
+                    )
                     continue
 
                 if parsed.kind == "final" and parsed.content:
@@ -436,6 +448,29 @@ class AssistantOrchestrator:
             self.session_manager.add_turn(self.current_session, "assistant", answer)
         return answer
 
+    def _recent_conversation_block(self, current_question: str) -> str:
+        """Return a bounded recent-conversation block for prompt injection."""
+        if not self.current_session or not self.current_session.turns:
+            return ""
+
+        prior_turns = list(self.current_session.turns)
+        if (
+            prior_turns
+            and prior_turns[-1].role == "user"
+            and prior_turns[-1].content == current_question
+        ):
+            prior_turns = prior_turns[:-1]
+        if not prior_turns:
+            return ""
+
+        max_turns = max(config.SESSION_HISTORY_TURNS, 0)
+        if max_turns == 0:
+            return ""
+
+        selected_turns = prior_turns[-max_turns:]
+        block = _format_recent_conversation(selected_turns, config.SESSION_HISTORY_TOKEN_BUDGET)
+        return block
+
     def _fallback_answer(self, question: str, result: dict[str, Any] | None) -> str:
         if not result:
             return "I could not gather enough evidence to answer that question. [assistant:no-result]"
@@ -493,3 +528,102 @@ def _build_default_adapter() -> Any:
     if adapter_name in {"openai", "openai-compatible", "openai_compatible"}:
         return OpenAICompatibleAdapter()
     return MockModelAdapter()
+
+
+# ---------------------------------------------------------------------------
+# Session continuity helpers
+# ---------------------------------------------------------------------------
+
+
+# A ConversationExcerpt is a formatted line from recent session memory.
+# Interpretation: each string is already safe to inject into the prompt.
+# Examples:
+#   "User: Tell me about Acer macrophyllum."
+#   "Assistant: The records show 3 living items in ALP1."
+ConversationExcerpt = str
+
+
+# conversation_turns is a list[ConversationTurn].
+# Interpretation: the turns appear in chronological order, oldest first.
+# Examples:
+#   [ConversationTurn("user", "Tell me more", "...")]
+#   [ConversationTurn("assistant", "It is in bed ALP1.", "...")]
+
+
+def _format_recent_conversation(
+    conversation_turns: list[ConversationTurn],
+    token_budget: int,
+) -> str:
+    """Format recent turns into a prompt block under a rough token budget."""
+    selected_turns, summarized_turns = _select_recent_turns_with_budget(conversation_turns, token_budget)
+    if not selected_turns and not summarized_turns:
+        return ""
+
+    lines = ["## Recent conversation"]
+    if summarized_turns:
+        lines.append(f"Earlier context summary: {_summarize_turns(summarized_turns)}")
+    lines.extend(_format_turn_line(turn) for turn in selected_turns)
+    return "\n".join(lines)
+
+
+def _select_recent_turns_with_budget(
+    conversation_turns: list[ConversationTurn],
+    token_budget: int,
+) -> tuple[list[ConversationTurn], list[ConversationTurn]]:
+    """Keep the newest turns that fit; return older overflow separately."""
+    if token_budget <= 0:
+        return ([], list(conversation_turns))
+
+    selected_reversed: list[ConversationTurn] = []
+    used_tokens = _estimate_token_count("## Recent conversation")
+
+    for turn in reversed(conversation_turns):
+        turn_tokens = _estimate_token_count(_format_turn_line(turn))
+        if selected_reversed and used_tokens + turn_tokens > token_budget:
+            break
+        if not selected_reversed and turn_tokens > token_budget:
+            selected_reversed.append(turn)
+            break
+        if used_tokens + turn_tokens > token_budget:
+            break
+        selected_reversed.append(turn)
+        used_tokens += turn_tokens
+
+    selected_turns = list(reversed(selected_reversed))
+    summarized_count = len(conversation_turns) - len(selected_turns)
+    summarized_turns = conversation_turns[:summarized_count]
+    return (selected_turns, summarized_turns)
+
+
+def _summarize_turns(conversation_turns: list[ConversationTurn]) -> str:
+    """Compress older turns into a single deterministic paragraph."""
+    snippets = [_clip_for_summary(turn.content) for turn in conversation_turns]
+    if not snippets:
+        return ""
+    return " ".join(
+        f"{_role_label(turn.role)} discussed {snippet}."
+        for turn, snippet in zip(conversation_turns, snippets, strict=False)
+    )
+
+
+def _format_turn_line(turn: ConversationTurn) -> ConversationExcerpt:
+    """Render one stored turn as a prompt line."""
+    return f"{_role_label(turn.role)}: {turn.content.strip()}"
+
+
+def _role_label(role: str) -> str:
+    """Map stored turn roles to prompt labels."""
+    return "User" if role == "user" else "Assistant"
+
+
+def _clip_for_summary(text: str, limit: int = 160) -> str:
+    """Return a single-line summary snippet without trailing overflow."""
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[: limit - 3].rstrip()}..."
+
+
+def _estimate_token_count(text: str) -> int:
+    """Estimate token count with a cheap word-and-punctuation heuristic."""
+    return len(re.findall(r"\w+|[^\w\s]", text, re.UNICODE))

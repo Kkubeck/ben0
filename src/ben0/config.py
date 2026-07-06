@@ -180,5 +180,7 @@ MODEL_ADAPTER: str = os.environ.get("BEN0_MODEL_ADAPTER", "mock")
 MODEL_NAME: str = os.environ.get("BEN0_MODEL_NAME", "")
 OLLAMA_URL: str = os.environ.get("BEN0_OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.environ.get("BEN0_OLLAMA_MODEL", "gemma3:12b")
+SESSION_HISTORY_TURNS: int = int(os.environ.get("BEN0_SESSION_HISTORY_TURNS", "5"))
+SESSION_HISTORY_TOKEN_BUDGET: int = int(os.environ.get("BEN0_SESSION_HISTORY_TOKEN_BUDGET", "2000"))
 
 ALLOW_PUBLIC_EXPORT: bool = os.environ.get("BEN0_ALLOW_PUBLIC_EXPORT", "false").lower() == "true"

@@ -8,6 +8,7 @@ from ben0.db.session import get_session, init_db, reset_singletons
 from ben0.ingest.csv_ingest import ingest_all_csvs
 from ben0.ingest.document_ingest import ingest_documents
 from ben0.retrieval.index import build_index
+from ben0.session import ConversationTurn
 from ben0.synthetic.generate_dataset import generate_all
 from ben0.validation.engine import run_validation
 
@@ -23,6 +24,21 @@ class CriticMockAdapter(MockModelAdapter):
                 "1. Add another citation if available."
             )
         return super().generate(prompt, system=system)
+
+
+class CapturePromptAdapter:
+    def __init__(self) -> None:
+        self.prompt = ""
+        self.system = ""
+
+    @property
+    def model_name(self) -> str:
+        return "capture"
+
+    def generate(self, prompt: str, system: str | None = None) -> str:
+        self.prompt = prompt
+        self.system = system or ""
+        return "FINAL: Captured prompt. [assistant:test]"
 
 
 def _prepare_dataset(tmp_path: Path) -> str:
@@ -76,5 +92,36 @@ def test_orchestrator_appends_critic_output_when_enabled(tmp_path: Path) -> None
         assert "Evidence Check:" in answer
         assert "🧪 Critic:" in answer
         assert "partially supported" in answer
+    finally:
+        reset_singletons()
+
+
+def test_orchestrator_injects_recent_conversation_block(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{tmp_path / 'ben0-history.db'}"
+    reset_singletons()
+    init_db(db_url)
+
+    adapter = CapturePromptAdapter()
+    orchestrator = AssistantOrchestrator(
+        adapter=adapter,
+        session_factory=lambda: get_session(db_url),
+    )
+    session = orchestrator.session_manager.create_session(name="history-test", model_adapter="capture")
+    session.turns = [
+        ConversationTurn(role="user", content="Tell me about Acer macrophyllum.", timestamp="2026-07-05T00:00:00"),
+        ConversationTurn(role="assistant", content="It is represented in the collection.", timestamp="2026-07-05T00:00:01"),
+        ConversationTurn(role="user", content="Which bed is it in?", timestamp="2026-07-05T00:00:02"),
+        ConversationTurn(role="assistant", content="The records mention ALP1.", timestamp="2026-07-05T00:00:03"),
+    ]
+    orchestrator.current_session = session
+
+    try:
+        answer = orchestrator.answer("Tell me more about that.")
+
+        assert "## Recent conversation" in adapter.prompt
+        assert "User: Tell me about Acer macrophyllum." in adapter.prompt
+        assert "Assistant: The records mention ALP1." in adapter.prompt
+        assert "User: Tell me more about that." not in adapter.prompt
+        assert "[assistant:test]" in answer
     finally:
         reset_singletons()
