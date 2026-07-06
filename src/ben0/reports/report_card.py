@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from ben0.db.models import (
     Taxon,
     ValidationIssue,
 )
+from ben0.reports.snapshot import CollectionSnapshot
 
 _THREATENED_CODES = {"VU", "EN", "CR"}
 _PROPAGATION_TYPES = {"sown", "germinated", "pricked_out", "potted"}
@@ -48,6 +49,7 @@ class ReportCard:
 
     garden_name: str
     generated_at: str
+    temporal_context: dict[str, Any] | None = None
     sections: list[SectionScore] = field(default_factory=list)
 
     def overall_rating(self) -> str:
@@ -59,7 +61,7 @@ class ReportCard:
         return "adequate"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "garden_name": self.garden_name,
             "generated_at": self.generated_at,
             "overall_rating": self.overall_rating(),
@@ -73,17 +75,44 @@ class ReportCard:
                 for s in self.sections
             ],
         }
+        if self.temporal_context is not None:
+            d["temporal"] = self.temporal_context
+        return d
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, default=str)
+
+
+@dataclass
+class SectionDelta:
+    """Comparison delta for one section between two report cards."""
+
+    name: str
+    trend: str  # "improving" | "stable" | "declining"
+    metric_deltas: dict[str, Any]
+
+
+@dataclass
+class ReportCardComparison:
+    """Side-by-side comparison of two report cards."""
+
+    card_a: ReportCard
+    card_b: ReportCard
+    label_a: str
+    label_b: str
+    deltas: list[SectionDelta]
 
 
 # ---------------------------------------------------------------------------
 # Section 1: Taxonomic Diversity
 # ---------------------------------------------------------------------------
 
-def assess_taxonomic_diversity(session: Session) -> SectionScore:
+def assess_taxonomic_diversity(snapshot: CollectionSnapshot) -> SectionScore:
     """Assess breadth of taxonomic coverage across families, genera, and species."""
+    session = snapshot.session
+
+    alive_accession_ids = snapshot.alive_accession_ids()
+
     taxa = session.scalars(
         select(Taxon).options(selectinload(Taxon.accessions))
     ).all()
@@ -95,12 +124,23 @@ def assess_taxonomic_diversity(session: Session) -> SectionScore:
     for taxon in taxa:
         fam = taxon.family or "Unknown"
         gen = taxon.genus or "Unknown"
+
+        if snapshot.as_of is not None:
+            acc_count = sum(
+                1 for acc in taxon.accessions if acc.id in alive_accession_ids
+            )
+        else:
+            acc_count = len(taxon.accessions)
+
+        if acc_count == 0:
+            continue
+
         families[fam] += 1
         genera[gen] += 1
-        acc_count = len(taxon.accessions)
         family_accession_count[fam] += acc_count
 
-    total_taxa = len(taxa)
+    total_taxa = len(families) + len(genera)  # approximate: actual taxon count below
+    total_taxa = session.scalar(select(func.count()).select_from(Taxon)) or 0
     total_families = len(families)
     total_genera = len(genera)
     genera_per_family = round(total_genera / total_families, 1) if total_families else 0.0
@@ -158,9 +198,20 @@ def assess_taxonomic_diversity(session: Session) -> SectionScore:
 # Section 2: Conservation Value
 # ---------------------------------------------------------------------------
 
-def assess_conservation_value(session: Session) -> SectionScore:
+def assess_conservation_value(snapshot: CollectionSnapshot) -> SectionScore:
     """Assess the collection's contribution to ex situ conservation of at-risk taxa."""
-    total_taxa = session.scalar(select(func.count()).select_from(Taxon)) or 0
+    session = snapshot.session
+
+    if snapshot.as_of is not None:
+        alive_acc_ids = snapshot.alive_accession_ids()
+        alive_taxon_ids: set[str] = set()
+        for acc in session.scalars(select(Accession)).all():
+            if acc.id in alive_acc_ids and acc.taxon_id:
+                alive_taxon_ids.add(acc.taxon_id)
+        total_taxa = len(alive_taxon_ids)
+    else:
+        total_taxa = session.scalar(select(func.count()).select_from(Taxon)) or 0
+        alive_taxon_ids = None  # type: ignore[assignment]
 
     statuses = session.scalars(select(ConservationStatus)).all()
 
@@ -169,6 +220,8 @@ def assess_conservation_value(session: Session) -> SectionScore:
     threatened_taxon_ids: set[str] = set()
 
     for cs in statuses:
+        if alive_taxon_ids is not None and cs.taxon_id not in alive_taxon_ids:
+            continue
         assessed_taxon_ids.add(cs.taxon_id)
         code = (cs.status_code or "").upper()
         by_status[code] += 1
@@ -221,11 +274,21 @@ def assess_conservation_value(session: Session) -> SectionScore:
 # Section 3: Provenance & Documentation
 # ---------------------------------------------------------------------------
 
-def assess_provenance(session: Session) -> SectionScore:
+def assess_provenance(snapshot: CollectionSnapshot) -> SectionScore:
     """Assess wild origin documentation, locality completeness, and collector records."""
+    session = snapshot.session
+
+    active_accession_ids: set[str] | None = None
+    if snapshot.as_of is not None:
+        active_accession_ids = {acc.id for acc in snapshot.active_accessions()}
+
     accessions = session.scalars(
         select(Accession).options(selectinload(Accession.provenances))
     ).all()
+
+    if active_accession_ids is not None:
+        accessions = [a for a in accessions if a.id in active_accession_ids]
+
     total = len(accessions)
 
     wild_count = 0
@@ -316,9 +379,12 @@ def assess_provenance(session: Session) -> SectionScore:
 # Section 4: Collection Security
 # ---------------------------------------------------------------------------
 
-def assess_collection_security(session: Session) -> SectionScore:
+def assess_collection_security(snapshot: CollectionSnapshot) -> SectionScore:
     """Assess resilience of the living collection against accession and item loss."""
-    # For each taxon, count living accessions (accessions that have at least one living item)
+    session = snapshot.session
+
+    alive_items_set = {it.id for it in snapshot.alive_items()}
+
     taxa = session.scalars(
         select(Taxon).options(
             selectinload(Taxon.accessions).selectinload(Accession.items)
@@ -330,18 +396,14 @@ def assess_collection_security(session: Session) -> SectionScore:
     all_accession_counts: list[int] = []
     single_item_accession_count = 0
     total_tracked_accessions = 0
-    vulnerable_taxa: list[tuple[str, int]] = []  # (scientific_name, threatened_status)
+    vulnerable_taxa: list[tuple[str, int]] = []
 
     for taxon in taxa:
         living_accession_ids: list[str] = []
         for acc in taxon.accessions:
-            living_items = [
-                it for it in acc.items
-                if (it.life_status or "").strip().lower() in {"living", "alive", "current"}
-            ]
+            living_items = [it for it in acc.items if it.id in alive_items_set]
             if living_items:
                 living_accession_ids.append(acc.id)
-                # Check single-item accessions
                 total_tracked_accessions += 1
                 if len(living_items) == 1:
                     single_item_accession_count += 1
@@ -355,7 +417,6 @@ def assess_collection_security(session: Session) -> SectionScore:
 
         if count == 1:
             single_accession_taxa_count += 1
-            # Flag if taxon has conservation value
             if taxon.iucn_status and taxon.iucn_status.upper() in _THREATENED_CODES:
                 vulnerable_taxa.append((taxon.scientific_name, 1))
 
@@ -410,13 +471,14 @@ def assess_collection_security(session: Session) -> SectionScore:
 # Section 5: Collection Dynamics
 # ---------------------------------------------------------------------------
 
-def assess_collection_dynamics(session: Session) -> SectionScore:
+def assess_collection_dynamics(snapshot: CollectionSnapshot) -> SectionScore:
     """Assess acquisition trends, living ratio, and collection age profile."""
     from ben0.dashboard.metrics import _extract_year, _normalize_item_status
 
-    accessions = session.scalars(
-        select(Accession).options(selectinload(Accession.items))
-    ).all()
+    session = snapshot.session
+
+    accessions = snapshot.active_accessions()
+    alive_items_set = {it.id for it in snapshot.alive_items()}
     items = session.scalars(select(Item)).all()
 
     decade_counter: Counter[int] = Counter()
@@ -432,7 +494,6 @@ def assess_collection_dynamics(session: Session) -> SectionScore:
         f"{decade}s": count for decade, count in sorted(decade_counter.items())
     }
 
-    # Growth trend: compare last 3 decades
     sorted_decades = sorted(decade_counter.keys())
     growth_trend = "stable"
     if len(sorted_decades) >= 3:
@@ -443,17 +504,30 @@ def assess_collection_dynamics(session: Session) -> SectionScore:
         elif counts[-1] < counts[0] * 0.8:
             growth_trend = "declining"
 
-    item_status_counts = Counter(_normalize_item_status(it.life_status) for it in items)
-    total_items = len(items)
-    alive_count = item_status_counts.get("alive", 0)
+    if snapshot.as_of is not None:
+        alive_count = len(alive_items_set)
+        total_items = len(items)
+    else:
+        item_status_counts = Counter(_normalize_item_status(it.life_status) for it in items)
+        total_items = len(items)
+        alive_count = item_status_counts.get("alive", 0)
+
     living_pct = round((alive_count / total_items) * 100, 1) if total_items else 0.0
 
     import statistics
-    current_year = datetime.utcnow().year
-    accession_ages = [current_year - y for y in accession_years if y <= current_year]
+    ref_year = snapshot.as_of.year if snapshot.as_of else datetime.utcnow().year
+    accession_ages = [ref_year - y for y in accession_years if y <= ref_year]
     median_accession_age_years = (
         round(statistics.median(accession_ages), 1) if accession_ages else None
     )
+
+    window_metrics: dict[str, Any] = {}
+    if snapshot.period_start is not None and snapshot.period_end is not None:
+        acquired = snapshot.acquired_accessions()
+        lost = snapshot.lost_items()
+        window_metrics["acquired_in_period"] = len(acquired)
+        window_metrics["lost_in_period"] = len(lost)
+        window_metrics["net_change"] = len(acquired) - len(lost)
 
     if growth_trend == "increasing" and living_pct >= 60:
         rating = "strong"
@@ -474,16 +548,26 @@ def assess_collection_dynamics(session: Session) -> SectionScore:
         findings.append(
             f"Median accession age: {median_accession_age_years} years."
         )
+    if window_metrics:
+        findings.append(
+            f"Window [{snapshot.period_start} to {snapshot.period_end}): "
+            f"{window_metrics.get('acquired_in_period', 0)} acquired, "
+            f"{window_metrics.get('lost_in_period', 0)} lost, "
+            f"net {window_metrics.get('net_change', 0):+d}."
+        )
+
+    metrics: dict[str, Any] = {
+        "accessions_by_decade": accessions_by_decade,
+        "growth_trend": growth_trend,
+        "living_pct": living_pct,
+        "median_accession_age_years": median_accession_age_years,
+    }
+    metrics.update(window_metrics)
 
     return SectionScore(
         name="Collection Dynamics",
         rating=rating,
-        metrics={
-            "accessions_by_decade": accessions_by_decade,
-            "growth_trend": growth_trend,
-            "living_pct": living_pct,
-            "median_accession_age_years": median_accession_age_years,
-        },
+        metrics=metrics,
         findings=findings,
     )
 
@@ -492,9 +576,10 @@ def assess_collection_dynamics(session: Session) -> SectionScore:
 # Section 6: Climate Readiness (stub)
 # ---------------------------------------------------------------------------
 
-def assess_climate_readiness(session: Session) -> SectionScore:
+def assess_climate_readiness(snapshot: CollectionSnapshot) -> SectionScore:
     """Stub: climate resilience assessment requires external CAT or climate zone data."""
-    # Check if any ConservationStatus records indicate climate-related assessment
+    session = snapshot.session
+
     climate_count = session.scalar(
         select(func.count()).select_from(ConservationStatus).where(
             ConservationStatus.notes.ilike("%climate%")
@@ -529,32 +614,35 @@ def assess_climate_readiness(session: Session) -> SectionScore:
 # Section 7: Nursery Pipeline
 # ---------------------------------------------------------------------------
 
-def assess_nursery_pipeline(session: Session) -> SectionScore:
+def assess_nursery_pipeline(snapshot: CollectionSnapshot) -> SectionScore:
     """Assess propagation pipeline throughput and success rates from Event records."""
-    propagation_types = list(_PROPAGATION_TYPES)
     planting_type = "planted"
 
-    # Count events by type for all propagation-related events
-    prop_events = session.scalars(
-        select(Event).where(Event.event_type.in_(propagation_types + [planting_type]))
+    prop_events = snapshot.propagation_events()
+    planting_events_list = snapshot.session.scalars(
+        select(Event).where(Event.event_type == planting_type)
     ).all()
 
+    if snapshot.period_start is not None and snapshot.period_end is not None:
+        from ben0.reports.snapshot import _parse_date
+        filtered: list[Event] = []
+        for ev in planting_events_list:
+            pd = _parse_date(ev.event_date)
+            if pd is not None and snapshot.period_start <= pd < snapshot.period_end:
+                filtered.append(ev)
+        planting_events_list = filtered
+
     event_type_counts: Counter[str] = Counter(e.event_type for e in prop_events)
-    total_propagation_events = sum(
-        event_type_counts.get(t, 0) for t in propagation_types
-    )
+    total_propagation_events = len(prop_events)
     germination_events = event_type_counts.get("germinated", 0)
     sown_events = event_type_counts.get("sown", 0)
-    planting_events = event_type_counts.get(planting_type, 0)
+    planting_events_count = len(planting_events_list)
 
-    # Accessions with both a propagation event AND a planting event
     prop_accession_ids: set[str] = set(
-        e.accession_id for e in prop_events
-        if e.event_type in _PROPAGATION_TYPES and e.accession_id
+        e.accession_id for e in prop_events if e.accession_id
     )
     planted_accession_ids: set[str] = set(
-        e.accession_id for e in prop_events
-        if e.event_type == planting_type and e.accession_id
+        e.accession_id for e in planting_events_list if e.accession_id
     )
     propagation_to_planting_count = len(prop_accession_ids & planted_accession_ids)
 
@@ -582,7 +670,7 @@ def assess_nursery_pipeline(session: Session) -> SectionScore:
             f"{event_type_counts.get('pricked_out', 0)} pricked out, "
             f"{event_type_counts.get('potted', 0)} potted)."
         )
-        findings.append(f"{planting_events} planting events recorded.")
+        findings.append(f"{planting_events_count} planting events recorded.")
         if propagation_to_planting_count:
             findings.append(
                 f"{propagation_to_planting_count} accessions have both propagation and planting records "
@@ -598,7 +686,7 @@ def assess_nursery_pipeline(session: Session) -> SectionScore:
             "total_propagation_events": total_propagation_events,
             "germination_events": germination_events,
             "sown_events": sown_events,
-            "planting_events": planting_events,
+            "planting_events": planting_events_count,
             "propagation_to_planting_count": propagation_to_planting_count,
             "success_rate_pct": success_rate_pct,
             "event_type_counts": dict(event_type_counts),
@@ -611,8 +699,9 @@ def assess_nursery_pipeline(session: Session) -> SectionScore:
 # Section 8: Data Integrity
 # ---------------------------------------------------------------------------
 
-def assess_data_integrity(session: Session) -> SectionScore:
+def assess_data_integrity(snapshot: CollectionSnapshot) -> SectionScore:
     """Assess data quality using dashboard metrics (reused from calculate_metrics)."""
+    session = snapshot.session
     metrics = calculate_metrics(session)
 
     issues_by_sev = metrics["validation_issues_by_severity"]
@@ -669,23 +758,154 @@ def assess_data_integrity(session: Session) -> SectionScore:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def generate_report_card(session: Session, garden_name: str = "Collection") -> ReportCard:
-    """Generate a full biodiversity report card for the given session."""
+def generate_report_card(
+    session: Session,
+    garden_name: str = "Collection",
+    snapshot_date: date | None = None,
+    period_start: date | None = None,
+    period_end: date | None = None,
+) -> ReportCard:
+    """Generate a full biodiversity report card for the given session.
+
+    Pass snapshot_date for point-in-time reconstruction.
+    Pass period_start and period_end for window mode.
+    Omit all three for current-state mode (backward compatible).
+    """
+    snapshot = CollectionSnapshot(
+        session=session,
+        as_of=snapshot_date,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+    temporal_context: dict[str, Any] | None = None
+    if snapshot_date is not None:
+        temporal_context = {"mode": "snapshot", "as_of": str(snapshot_date)}
+    elif period_start is not None or period_end is not None:
+        temporal_context = {
+            "mode": "window",
+            "period_start": str(period_start) if period_start else None,
+            "period_end": str(period_end) if period_end else None,
+        }
+
     sections = [
-        assess_taxonomic_diversity(session),
-        assess_conservation_value(session),
-        assess_provenance(session),
-        assess_collection_security(session),
-        assess_collection_dynamics(session),
-        assess_climate_readiness(session),
-        assess_nursery_pipeline(session),
-        assess_data_integrity(session),
+        assess_taxonomic_diversity(snapshot),
+        assess_conservation_value(snapshot),
+        assess_provenance(snapshot),
+        assess_collection_security(snapshot),
+        assess_collection_dynamics(snapshot),
+        assess_climate_readiness(snapshot),
+        assess_nursery_pipeline(snapshot),
+        assess_data_integrity(snapshot),
     ]
     return ReportCard(
         garden_name=garden_name,
         generated_at=datetime.utcnow().isoformat(timespec="seconds"),
+        temporal_context=temporal_context,
         sections=sections,
     )
+
+
+# ---------------------------------------------------------------------------
+# Comparison
+# ---------------------------------------------------------------------------
+
+_RATING_NUMERIC = {"strong": 2, "adequate": 1, "needs_attention": 0}
+
+
+def compare_report_cards(a: ReportCard, b: ReportCard) -> list[SectionDelta]:
+    """Compare two cards section-by-section and produce SectionDelta entries."""
+    deltas: list[SectionDelta] = []
+    sections_b = {s.name: s for s in b.sections}
+
+    for sec_a in a.sections:
+        sec_b = sections_b.get(sec_a.name)
+        if sec_b is None:
+            continue
+
+        rating_a = _RATING_NUMERIC.get(sec_a.rating, 1)
+        rating_b = _RATING_NUMERIC.get(sec_b.rating, 1)
+        diff = rating_b - rating_a
+
+        if diff > 0:
+            trend = "improving"
+        elif diff < 0:
+            trend = "declining"
+        else:
+            trend = "stable"
+
+        metric_deltas: dict[str, Any] = {}
+        for key, val_a in sec_a.metrics.items():
+            val_b = sec_b.metrics.get(key)
+            if isinstance(val_a, (int, float)) and isinstance(val_b, (int, float)):
+                delta = val_b - val_a
+                pct_change: float | None = None
+                if val_a != 0:
+                    pct_change = round((delta / abs(val_a)) * 100, 1)
+                metric_deltas[key] = {
+                    "a": val_a,
+                    "b": val_b,
+                    "delta": round(delta, 4) if isinstance(delta, float) else delta,
+                    "pct_change": pct_change,
+                }
+
+        deltas.append(SectionDelta(name=sec_a.name, trend=trend, metric_deltas=metric_deltas))
+
+    return deltas
+
+
+def render_comparison_markdown(comparison: ReportCardComparison) -> str:
+    """Render a side-by-side comparison of two report cards as Markdown."""
+    lines: list[str] = [
+        f"# Report Card Comparison: {comparison.card_a.garden_name}",
+        "",
+        f"| | {comparison.label_a} | {comparison.label_b} | Trend |",
+        "|-|---|---|---|",
+        f"| **Overall** | {comparison.card_a.overall_rating()} | {comparison.card_b.overall_rating()} | |",
+        "",
+    ]
+
+    delta_by_name = {d.name: d for d in comparison.deltas}
+
+    for sec_a, sec_b in zip(comparison.card_a.sections, comparison.card_b.sections):
+        delta = delta_by_name.get(sec_a.name)
+        trend_sym = {"improving": "+", "declining": "-", "stable": "~"}.get(
+            delta.trend if delta else "stable", "~"
+        )
+        lines.append(f"## {sec_a.name}")
+        lines.append("")
+        lines.append(
+            f"| Metric | {comparison.label_a} | {comparison.label_b} | Delta |"
+        )
+        lines.append("|---|---|---|---|")
+        lines.append(
+            f"| Rating | {sec_a.rating} | {sec_b.rating} | {trend_sym} |"
+        )
+
+        if delta:
+            for metric_key, vals in delta.metric_deltas.items():
+                a_val = vals.get("a", "")
+                b_val = vals.get("b", "")
+                d_val = vals.get("delta", "")
+                if isinstance(d_val, float):
+                    d_str = f"{d_val:+.2f}"
+                elif isinstance(d_val, int):
+                    d_str = f"{d_val:+d}"
+                else:
+                    d_str = str(d_val)
+                lines.append(f"| {metric_key} | {a_val} | {b_val} | {d_str} |")
+
+        lines.append("")
+
+        for finding in sec_a.findings:
+            lines.append(f"- **{comparison.label_a}:** {finding}")
+        for finding in sec_b.findings:
+            lines.append(f"- **{comparison.label_b}:** {finding}")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -717,9 +937,20 @@ def render_markdown(card: ReportCard) -> str:
         f"**Generated:** {card.generated_at}  ",
         f"**Overall Rating:** {overall_icon} {overall_label}",
         "",
-        "---",
-        "",
     ]
+
+    if card.temporal_context:
+        mode = card.temporal_context.get("mode", "current")
+        if mode == "snapshot":
+            lines.append(f"**Snapshot date:** {card.temporal_context.get('as_of')}  ")
+        elif mode == "window":
+            lines.append(
+                f"**Period:** {card.temporal_context.get('period_start')} to "
+                f"{card.temporal_context.get('period_end')}  "
+            )
+        lines.append("")
+
+    lines += ["---", ""]
 
     for section in card.sections:
         icon = _RATING_ICONS.get(section.rating, "⚪")

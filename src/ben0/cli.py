@@ -633,6 +633,51 @@ def report_command(output):
         click.echo(report)
 
 
+def _parse_snapshot_date(value: str) -> "date":
+    """Parse YYYY-MM-DD string to date; raise UsageError on failure."""
+    from datetime import date as _date
+    try:
+        return _date.fromisoformat(value)
+    except ValueError:
+        raise click.UsageError(f"Invalid date format: {value!r}. Use YYYY-MM-DD.")
+
+
+def _parse_period(value: str) -> "tuple[date, date]":
+    """Parse YYYY:YYYY or YYYY-MM-DD:YYYY-MM-DD into (start, end) dates."""
+    from datetime import date as _date
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise click.UsageError(
+            f"Invalid period format: {value!r}. Use YYYY:YYYY or YYYY-MM-DD:YYYY-MM-DD."
+        )
+    raw_start, raw_end = parts
+    try:
+        if len(raw_start) == 4:
+            start = _date(int(raw_start), 1, 1)
+        else:
+            start = _date.fromisoformat(raw_start)
+        if len(raw_end) == 4:
+            end = _date(int(raw_end), 12, 31)
+        else:
+            end = _date.fromisoformat(raw_end)
+    except ValueError as exc:
+        raise click.UsageError(f"Invalid period: {value!r}. {exc}")
+    return start, end
+
+
+def _parse_compare_arg(value: str) -> "tuple[date | None, date | None, date | None]":
+    """Parse a --compare argument as either a date or a period.
+
+    Returns (snapshot_date, period_start, period_end).
+    """
+    from datetime import date as _date
+    if ":" in value:
+        start, end = _parse_period(value)
+        return None, start, end
+    snap = _parse_snapshot_date(value)
+    return snap, None, None
+
+
 @cli.command(name="report-card")
 @click.option("--output", default=None, help="Write report to a file.")
 @click.option(
@@ -643,7 +688,26 @@ def report_command(output):
     show_default=True,
 )
 @click.option("--json-output", default=None, help="Separate JSON output path (only with --format both).")
-def report_card_command(output, output_format, json_output):
+@click.option(
+    "--snapshot-date",
+    default=None,
+    metavar="YYYY-MM-DD",
+    help="Reconstruct collection state at this date.",
+)
+@click.option(
+    "--period",
+    default=None,
+    metavar="START:END",
+    help="Window mode: YYYY:YYYY or YYYY-MM-DD:YYYY-MM-DD.",
+)
+@click.option(
+    "--compare",
+    nargs=2,
+    default=None,
+    metavar="A B",
+    help="Compare two contexts. Each can be a date (YYYY-MM-DD) or period (YYYY:YYYY).",
+)
+def report_card_command(output, output_format, json_output, snapshot_date, period, compare):
     """Generate a Collection Biodiversity Report Card.
 
     Comprehensive self-assessment of the living collection's biodiversity
@@ -657,19 +721,112 @@ def report_card_command(output, output_format, json_output):
 
     Examples:
         ben0 report-card
+        ben0 report-card --snapshot-date 2020-12-31
+        ben0 report-card --period 2020:2024
+        ben0 report-card --compare 2015-12-31 2025-12-31
         ben0 report-card --output annual_assessment.md
         ben0 report-card --format json --output card.json
         ben0 report-card --format both --output card.md --json-output card.json
     """
+    from datetime import date as _date
+
     from ben0 import config
     from ben0.db.session import get_session, init_db as _init_db
-    from ben0.reports.report_card import generate_report_card, render_markdown
+    from ben0.reports.report_card import (
+        ReportCardComparison,
+        compare_report_cards,
+        generate_report_card,
+        render_comparison_markdown,
+        render_markdown,
+    )
 
     _init_db()
     garden_name = config.get_active_garden() or config.INSTITUTION_NAME
+
+    snap_date: _date | None = None
+    period_start: _date | None = None
+    period_end: _date | None = None
+
+    if snapshot_date:
+        snap_date = _parse_snapshot_date(snapshot_date)
+    if period:
+        period_start, period_end = _parse_period(period)
+
+    if compare:
+        arg_a, arg_b = compare
+        snap_a, ps_a, pe_a = _parse_compare_arg(arg_a)
+        snap_b, ps_b, pe_b = _parse_compare_arg(arg_b)
+
+        label_a = arg_a
+        label_b = arg_b
+
+        session = get_session()
+        try:
+            card_a = generate_report_card(
+                session, garden_name=garden_name,
+                snapshot_date=snap_a, period_start=ps_a, period_end=pe_a,
+            )
+            card_b = generate_report_card(
+                session, garden_name=garden_name,
+                snapshot_date=snap_b, period_start=ps_b, period_end=pe_b,
+            )
+        finally:
+            session.close()
+
+        deltas = compare_report_cards(card_a, card_b)
+        comparison = ReportCardComparison(
+            card_a=card_a,
+            card_b=card_b,
+            label_a=label_a,
+            label_b=label_b,
+            deltas=deltas,
+        )
+
+        if output_format in ("markdown", "both"):
+            md = render_comparison_markdown(comparison)
+            if output:
+                Path(output).parent.mkdir(parents=True, exist_ok=True)
+                Path(output).write_text(md, encoding="utf-8")
+                click.echo(f"Comparison written to {output}")
+            else:
+                click.echo(md)
+
+        if output_format in ("json", "both"):
+            import json as _json
+            data = {
+                "mode": "compare",
+                "label_a": label_a,
+                "label_b": label_b,
+                "card_a": card_a.to_dict(),
+                "card_b": card_b.to_dict(),
+                "deltas": [
+                    {
+                        "name": d.name,
+                        "trend": d.trend,
+                        "metric_deltas": d.metric_deltas,
+                    }
+                    for d in deltas
+                ],
+            }
+            json_str = _json.dumps(data, indent=2, default=str)
+            json_path = json_output or (output.replace(".md", ".json") if output else None)
+            if json_path:
+                Path(json_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(json_path).write_text(json_str, encoding="utf-8")
+                click.echo(f"Comparison JSON written to {json_path}")
+            elif output_format == "json":
+                click.echo(json_str)
+        return
+
     session = get_session()
     try:
-        card = generate_report_card(session, garden_name=garden_name)
+        card = generate_report_card(
+            session,
+            garden_name=garden_name,
+            snapshot_date=snap_date,
+            period_start=period_start,
+            period_end=period_end,
+        )
     finally:
         session.close()
 
