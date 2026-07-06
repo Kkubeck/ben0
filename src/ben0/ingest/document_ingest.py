@@ -6,6 +6,7 @@ import logging
 import re
 from pathlib import Path
 
+import docx
 import fitz  # pymupdf
 
 from ben0.db.models import Document, SourceChunk
@@ -66,14 +67,26 @@ def _extract_pdf_text(filepath: Path) -> str | None:
         return None
 
 
+def _extract_docx_text(filepath: Path) -> str | None:
+    try:
+        doc = docx.Document(filepath)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        if not paragraphs:
+            return None
+        return "\n".join(paragraphs)
+    except Exception as e:
+        logging.warning(f"Failed to extract text from DOCX {filepath}: {e}")
+        return None
+
+
 def ingest_documents(doc_dir: Path, db_url: str | None = None) -> dict[str, int]:
     counts = {"documents": 0, "chunks": 0, "skipped": 0}
     session = get_session(db_url)
     try:
-        # Find both .txt and .pdf files
         txt_files = sorted(doc_dir.rglob("*.txt"))
         pdf_files = sorted(doc_dir.rglob("*.pdf"))
-        all_files = txt_files + pdf_files
+        docx_files = sorted(doc_dir.rglob("*.docx"))
+        all_files = txt_files + pdf_files + docx_files
 
         for filepath in all_files:
             rel = str(filepath.relative_to(doc_dir))
@@ -83,11 +96,17 @@ def ingest_documents(doc_dir: Path, db_url: str | None = None) -> dict[str, int]
                 counts["skipped"] += 1
                 continue
 
-            # Extract text based on file type
-            if filepath.suffix.lower() == ".pdf":
+            suffix = filepath.suffix.lower()
+            if suffix == ".pdf":
                 text = _extract_pdf_text(filepath)
                 if text is None:
                     logging.warning(f"Skipping PDF with no extractable text: {filepath}")
+                    counts["skipped"] += 1
+                    continue
+            elif suffix == ".docx":
+                text = _extract_docx_text(filepath)
+                if text is None:
+                    logging.warning(f"Skipping DOCX with no extractable text: {filepath}")
                     counts["skipped"] += 1
                     continue
             else:
