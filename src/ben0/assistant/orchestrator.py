@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import date
 from typing import Any, Callable
 
 from ben0 import config
 from ben0.assistant.critic import critique_answer
+from ben0.assistant.entity_detection import DetectedEntity, detect_entities
 from ben0.assistant.evidence_check import (
     VerificationResult,
     check_rule_compliance,
@@ -18,10 +20,17 @@ from ben0.assistant.evidence_check import (
 )
 from ben0.assistant.model_adapters import MockModelAdapter, OllamaAdapter, OpenAICompatibleAdapter
 from ben0.assistant.persona import VISITING_SCHOLAR_SYSTEM_PROMPT
-from ben0.assistant.prompts import build_hybrid_prompt, build_initial_prompt, build_tool_result_prompt
+from ben0.assistant.prompts import (
+    build_entity_context_block,
+    build_hybrid_prompt,
+    build_initial_prompt,
+    build_tool_result_prompt,
+)
 from ben0.assistant.query_router import route_query
 from ben0.assistant.tools import build_tool_registry
 from ben0.db.session import get_session
+from ben0.memory.dossier import Dossier, DossierEntry, append_learned, load_dossier, seed_from_db
+from ben0.memory.tags import assign_tags
 from ben0.rules.inject import format_rules_for_prompt
 from ben0.rules.loader import load_rules
 from ben0.rules.matcher import match_rules
@@ -62,6 +71,7 @@ class AssistantOrchestrator:
 
         session = self.session_factory()
         try:
+            question_entities = detect_entities(session, question)
             rules_dir = config._GARDEN_ROOT / "data" / "rules"
             self._last_matched_rules = match_rules(question, load_rules(rules_dir))
             system_prompt = VISITING_SCHOLAR_SYSTEM_PROMPT
@@ -70,6 +80,7 @@ class AssistantOrchestrator:
             recent_conversation = self._recent_conversation_block(question)
 
             plan = route_query(question)
+            entity_context = self._entity_context_block(session, question, plan, question_entities)
             # Map specificity to compression level: broad=2, medium=1, specific=None
             cl = plan.compression_level if plan.compression_level > 0 else None
             registry = build_tool_registry(session, adapter=self.adapter, compression_level=cl)
@@ -87,12 +98,14 @@ class AssistantOrchestrator:
                     doc_result=pre_fetched.get("documents"),
                     routing_hint=plan.routing_hint,
                     recent_conversation=recent_conversation,
+                    entity_context=entity_context,
                 )
             else:
                 prompt = build_initial_prompt(
                     question,
                     sorted(registry),
                     recent_conversation=recent_conversation,
+                    entity_context=entity_context,
                 )
                 if plan.routing_hint:
                     prompt = f"{prompt}\n\nRouting hint: {plan.routing_hint}"
@@ -117,15 +130,20 @@ class AssistantOrchestrator:
                         arguments,
                         last_result,
                         recent_conversation=recent_conversation,
+                        entity_context=entity_context,
                     )
                     continue
 
                 if parsed.kind == "final" and parsed.content:
                     answer = self._ensure_citations(parsed.content, last_result)
-                    return self._record_and_return(self._append_verification(answer))
+                    final_answer = self._record_and_return(self._append_verification(answer))
+                    self._learn_from_answer(session, question, question_entities)
+                    return final_answer
 
             answer = self._fallback_answer(question, last_result)
-            return self._record_and_return(self._append_verification(answer))
+            final_answer = self._record_and_return(self._append_verification(answer))
+            self._learn_from_answer(session, question, question_entities)
+            return final_answer
         finally:
             session.close()
 
@@ -365,6 +383,7 @@ class AssistantOrchestrator:
                     continue
                 extracted.append(
                     {
+                        **row,
                         "chunk_id": row.get("chunk_id") or row.get("citation") or row.get("id"),
                         "citation": row.get("citation"),
                         "document_name": row.get("document_name"),
@@ -447,6 +466,116 @@ class AssistantOrchestrator:
         if self.current_session:
             self.session_manager.add_turn(self.current_session, "assistant", answer)
         return answer
+
+    def _entity_context_block(
+        self,
+        session: Any,
+        question: str,
+        plan: Any,
+        question_entities: list[DetectedEntity],
+    ) -> str:
+        """Return the dossier block for entities mentioned in the question."""
+        dossiers = self._load_dossiers_for_entities(session, question_entities)
+        if not dossiers:
+            return ""
+
+        relevant_tags = _question_relevant_tags(f"{question}\n{plan.routing_hint}")
+        if not relevant_tags:
+            return build_entity_context_block(dossiers)
+
+        filtered = [self._filtered_dossier_view(dossier, relevant_tags) for dossier in dossiers]
+        filtered = [dossier for dossier in filtered if dossier.facts or dossier.learned]
+        return build_entity_context_block(filtered)
+
+    def _learn_from_answer(
+        self,
+        session: Any,
+        question: str,
+        question_entities: list[DetectedEntity],
+    ) -> None:
+        """Persist learned dossier entries for entities found in the question and evidence."""
+        if not self._last_retrieved_chunks and not question_entities:
+            return
+
+        chunk_entities = self._detect_entities_in_chunks(session, self._last_retrieved_chunks)
+        entities = _dedupe_detected_entities([*question_entities, *chunk_entities])
+        if not entities:
+            return
+
+        for entity in entities:
+            dossier = self._load_or_seed_dossier(session, entity)
+            entries = self._build_dossier_entries(entity, dossier)
+            if entries or not dossier.path.exists():
+                append_learned(dossier, entries)
+
+    def _detect_entities_in_chunks(
+        self,
+        session: Any,
+        retrieved_chunks: list[dict[str, Any]],
+    ) -> list[DetectedEntity]:
+        """Return entities detected in retrieved chunk text."""
+        detected: list[DetectedEntity] = []
+        for chunk in retrieved_chunks:
+            chunk_text = str(chunk.get("text") or chunk.get("snippet") or "").strip()
+            if not chunk_text:
+                continue
+            detected.extend(detect_entities(session, chunk_text))
+        return _dedupe_detected_entities(detected)
+
+    def _load_dossiers_for_entities(
+        self,
+        session: Any,
+        entities: list[DetectedEntity],
+    ) -> list[Dossier]:
+        """Return dossiers for the supplied entities, creating seeded files as needed."""
+        dossiers: list[Dossier] = []
+        for entity in entities:
+            dossiers.append(self._load_or_seed_dossier(session, entity))
+        return dossiers
+
+    def _load_or_seed_dossier(self, session: Any, entity: DetectedEntity) -> Dossier:
+        """Load an entity dossier, seeding it from the DB on first encounter."""
+        dossier = load_dossier(entity.entity_type, entity.entity_id)
+        dossier.canonical_name = entity.canonical_name
+        if dossier.facts or dossier.learned or dossier.path.exists():
+            return dossier
+
+        dossier.facts = seed_from_db(session, entity)
+        return dossier
+
+    def _filtered_dossier_view(self, dossier: Dossier, relevant_tags: set[str]) -> Dossier:
+        """Return a prompt-safe dossier copy with only relevant learned entries."""
+        learned = [
+            entry for entry in dossier.learned
+            if set(entry.tags) & relevant_tags
+        ]
+        return replace(dossier, learned=learned)
+
+    def _build_dossier_entries(
+        self,
+        entity: DetectedEntity,
+        dossier: Dossier,
+    ) -> list[DossierEntry]:
+        """Return new learned entries for one entity from the latest retrieved chunks."""
+        existing_texts = {entry.text for entry in dossier.learned}
+        entries: list[DossierEntry] = []
+        for chunk in self._last_retrieved_chunks:
+            if not _chunk_mentions_entity(chunk, entity):
+                continue
+            entry_text = _chunk_entry_text(chunk)
+            if not entry_text or entry_text in existing_texts:
+                continue
+            tags = _chunk_entry_tags(chunk)
+            entries.append(
+                DossierEntry(
+                    timestamp=_today_iso(),
+                    tags=tags,
+                    text=entry_text,
+                    source_session=self.current_session.session_id if self.current_session else None,
+                )
+            )
+            existing_texts.add(entry_text)
+        return entries
 
     def _recent_conversation_block(self, current_question: str) -> str:
         """Return a bounded recent-conversation block for prompt injection."""
@@ -627,3 +756,87 @@ def _clip_for_summary(text: str, limit: int = 160) -> str:
 def _estimate_token_count(text: str) -> int:
     """Estimate token count with a cheap word-and-punctuation heuristic."""
     return len(re.findall(r"\w+|[^\w\s]", text, re.UNICODE))
+
+
+# relevant_tag_set is a set[str].
+# Interpretation: each tag is suitable for dossier-entry filtering on a question.
+# Examples:
+#   {"status", "location"}
+#   {"provenance"}
+
+
+def _question_relevant_tags(text: str) -> set[str]:
+    """Return dossier tags that appear relevant to the routing hint or question."""
+    lowered = text.lower()
+    tag_keywords = {
+        "status": ("status", "alive", "dead", "mortality", "condition", "vigor"),
+        "location": ("location", "bed", "garden", "where", "planted", "move"),
+        "provenance": ("provenance", "origin", "collector", "wild", "source"),
+        "propagation": ("propagation", "cutting", "germination", "nursery"),
+        "taxonomy": ("taxon", "taxonomy", "family", "name", "species"),
+        "conservation": ("iucn", "conservation", "rarity", "threat"),
+        "curator-note": ("note", "concern", "observation"),
+        "document-ref": ("document", "report", "plan", "pdf"),
+        "validation": ("validation", "quality", "correction", "issue"),
+    }
+    return {
+        tag
+        for tag, keywords in tag_keywords.items()
+        if any(keyword in lowered for keyword in keywords)
+    }
+
+
+def _chunk_mentions_entity(chunk: dict[str, Any], entity: DetectedEntity) -> bool:
+    """Return whether a retrieved chunk appears to describe entity."""
+    if entity.entity_type == "taxon" and chunk.get("taxon_id") == entity.entity_id:
+        return True
+    if entity.entity_type == "accession":
+        accession_id = chunk.get("accession_id")
+        if accession_id == entity.entity_id:
+            return True
+        citation = str(chunk.get("citation") or "")
+        if entity.entity_id in citation:
+            return True
+    chunk_text = str(chunk.get("text") or chunk.get("snippet") or "")
+    lowered = chunk_text.lower()
+    return entity.canonical_name.lower() in lowered or entity.entity_id.lower() in lowered
+
+
+def _chunk_entry_text(chunk: dict[str, Any]) -> str:
+    """Return the best available fact text for dossier learning."""
+    for key in ("text", "snippet"):
+        value = chunk.get(key)
+        if isinstance(value, str):
+            compact = " ".join(value.split())
+            if compact:
+                return compact
+    return ""
+
+
+def _chunk_entry_tags(chunk: dict[str, Any]) -> list[str]:
+    """Return 1-2 tags inferred from a retrieved chunk."""
+    candidate_fields = {
+        key: value
+        for key, value in chunk.items()
+        if value not in (None, "", [], {})
+    }
+    tags = assign_tags(candidate_fields)
+    return tags or ["document-ref"]
+
+
+def _dedupe_detected_entities(entities: list[DetectedEntity]) -> list[DetectedEntity]:
+    """Return detected entities in first-seen order without duplicates."""
+    deduped: list[DetectedEntity] = []
+    seen: set[tuple[str, str]] = set()
+    for entity in entities:
+        marker = (entity.entity_type, entity.entity_id)
+        if marker in seen:
+            continue
+        deduped.append(entity)
+        seen.add(marker)
+    return deduped
+
+
+def _today_iso() -> str:
+    """Return today's date for learned dossier entries."""
+    return date.today().isoformat()
