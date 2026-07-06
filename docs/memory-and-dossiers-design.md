@@ -362,6 +362,70 @@ ben0 dossier --search propagation         # find dossiers with tag
 - Graph visualization of relationships
 
 
+## 9. Security Considerations
+
+### Prompt injection via dossiers and session history
+
+Dossier content and session turns are injected directly into LLM
+prompts. A malicious or compromised curator-note could contain prompt
+injection text designed to manipulate ben0's answers or exfiltrate
+data through crafted responses.
+
+**Mitigations:**
+- Sanitize dossier entries before prompt injection: strip control
+  characters, cap entry length, reject entries matching known injection
+  patterns (e.g., "ignore all previous instructions")
+- Session history entries are already system-generated, but user
+  questions are injected verbatim. Apply the same sanitization.
+- Consider a read-only "Facts" section that only the seeding process
+  can write, separate from the user-writable "Learned" section.
+
+### Access control on annotations
+
+In single-user deployments (current scope), anyone with filesystem
+access can run `ben0 note` and write to any dossier. For multi-user
+or institutional deployments:
+
+- Annotations should carry an author field
+- Role-based write access (curator vs. read-only user)
+- Audit log of who wrote what and when
+- Not required for v0, but the dossier format should include an
+  `author` field from the start to avoid retrofitting later
+
+### Sensitive data in plaintext
+
+Dossiers will accumulate institutional knowledge that may include:
+- Exact GPS coordinates of wild-collected material
+- Collector names and expedition details
+- Conservation assessments for threatened species
+- Location data for poaching-risk taxa
+
+This connects to the PROP project's FAIR/CARE framework: some dossier
+content should be access-controlled, particularly locality data for
+sensitive species.
+
+**Mitigations:**
+- Tag sensitive entries with a `restricted` flag
+- Default-deny locality and collector detail in any export or shared
+  view (mirrors PROP's governance defaults)
+- Dossier directory should be in .gitignore by default so accumulated
+  knowledge is never accidentally committed to a public repo
+- Consider file-level encryption for dossiers containing restricted
+  entries (future)
+
+### Data integrity
+
+Dossiers are append-only markdown files with no checksums or
+integrity verification. A corrupted or tampered dossier could feed
+false information into ben0's context assembly.
+
+**Mitigations:**
+- Optional hash-per-entry appended as a comment (lightweight
+  tamper detection, not cryptographic security)
+- Periodic validation pass comparing dossier "Facts" against current
+  DB state (catches drift and tampering simultaneously)
+
+
 ## Build Order
 
 1. **Session continuity** -- inject last N turns into prompt. Smallest
