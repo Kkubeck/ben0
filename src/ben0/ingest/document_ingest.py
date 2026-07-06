@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import platform
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 import docx
@@ -79,6 +82,38 @@ def _extract_docx_text(filepath: Path) -> str | None:
         return None
 
 
+def _extract_doc_text(filepath: Path) -> str | None:
+    """Extract text from legacy .doc files using platform tools."""
+    try:
+        if platform.system() == "Darwin":
+            result = subprocess.run(
+                ["textutil", "-convert", "txt", "-stdout", str(filepath)],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                ["libreoffice", "--headless", "--convert-to", "txt:Text",
+                 "--outdir", tmpdir, str(filepath)],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode == 0:
+                txt_path = Path(tmpdir) / (filepath.stem + ".txt")
+                if txt_path.exists():
+                    text = txt_path.read_text(encoding="utf-8", errors="replace")
+                    if text.strip():
+                        return text.strip()
+    except FileNotFoundError:
+        logging.warning(
+            f"No .doc converter found for {filepath}. "
+            "Install LibreOffice or run on macOS (textutil)."
+        )
+    except Exception as e:
+        logging.warning(f"Failed to extract text from DOC {filepath}: {e}")
+    return None
+
+
 def ingest_documents(doc_dir: Path, db_url: str | None = None) -> dict[str, int]:
     counts = {"documents": 0, "chunks": 0, "skipped": 0}
     session = get_session(db_url)
@@ -86,7 +121,9 @@ def ingest_documents(doc_dir: Path, db_url: str | None = None) -> dict[str, int]
         txt_files = sorted(doc_dir.rglob("*.txt"))
         pdf_files = sorted(doc_dir.rglob("*.pdf"))
         docx_files = sorted(doc_dir.rglob("*.docx"))
-        all_files = txt_files + pdf_files + docx_files
+        doc_files = sorted(doc_dir.rglob("*.doc"))
+        doc_files = [f for f in doc_files if f.suffix.lower() == ".doc"]
+        all_files = txt_files + pdf_files + docx_files + doc_files
 
         for filepath in all_files:
             rel = str(filepath.relative_to(doc_dir))
@@ -107,6 +144,12 @@ def ingest_documents(doc_dir: Path, db_url: str | None = None) -> dict[str, int]
                 text = _extract_docx_text(filepath)
                 if text is None:
                     logging.warning(f"Skipping DOCX with no extractable text: {filepath}")
+                    counts["skipped"] += 1
+                    continue
+            elif suffix == ".doc":
+                text = _extract_doc_text(filepath)
+                if text is None:
+                    logging.warning(f"Skipping DOC (no converter or no text): {filepath}")
                     counts["skipped"] += 1
                     continue
             else:
