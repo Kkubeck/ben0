@@ -10,18 +10,36 @@ BEN-0 is designed to behave like a careful in-house research assistant, not an a
 
 ## Features
 
-- Local SQLite database with SQLAlchemy models
-- Synthetic dataset generator for demos and testing
-- Synthetic CSV ingest plus IrisBG export ingest
-- Text and PDF document ingest with local retrieval
-- Deterministic validation engine for data quality checks
-- Correction ticket workflow
-- Markdown reporting and Streamlit dashboard
-- Local assistant with mock, Gemma, Qwen, and Ollama-backed adapters
-- Three-lane hybrid RAG with codex compilation, rules, and evidence checks
-- Institution interview workflow for capturing local garden rules and quirks
-- Garden workspaces plus saved/resumable sessions
-- Sensitive-data-aware export path
+### Data ingestion and validation
+
+- **IrisBG export ingest**: reads paired `accession_history.csv` and `accession_item_history.csv` directly from IrisBG report exports
+- **Document ingest**: text files, PDFs (via PyMuPDF), and structured notes, all indexed for retrieval
+- **Synthetic dataset**: a built-in fictional garden ("Cascadia Demonstration Botanical Garden") with realistic data-quality problems for demos and testing
+- **Deterministic validation**: rule-based checks catch missing provenance, suspect dates, orphan items, and other data integrity issues without relying on a language model
+- **Correction tickets**: validation issues become reviewable tickets that staff can accept, reject, or defer
+
+### Knowledge and retrieval
+
+- **Three-lane hybrid RAG**: raw source retrieval (Lane A), compiled topic summaries (Lane B), and structured YAML rules and local exceptions (Lane C), combined at answer time with evidence checks
+- **Institution interview**: eight data-informed setup questions about statuses, provenance, workflow, locations, collection focus, data quirks, and sensitive data handling, parsed into Lane C rule files
+- **Compiled codex**: generated working interpretations derived from source material, kept separate from the originals so the raw data remains the court of appeal
+
+### Assistant
+
+- **Visiting scholar persona**: answers questions about the collection with citations, flags uncertainty, never silently edits records
+- **Model-agnostic**: ships with a deterministic mock adapter; also supports Gemma, Qwen, and any Ollama-hosted model
+- **Optional LLM critic**: an evidence/conflict pass that double-checks answers against source material before returning them
+
+### Garden workspaces and sessions
+
+- **Multi-garden support**: each institution gets its own workspace (`ben0 init --garden`, `ben0 use`, `ben0 gardens`) with isolated data, rules, and configuration
+- **Saved sessions**: chat and interview sessions persist as JSON, with auto-save, resume, and history browsing
+- **Sensitive-data-aware export**: filtered output path that excludes restricted or review-only records by default
+
+### Reporting and dashboard
+
+- **Markdown health reports**: collection overview, validation summary, provenance breakdown, and data quality metrics
+- **Streamlit dashboard**: interactive collection metrics, search, and ticket management
 
 ## Quick start
 
@@ -232,4 +250,8 @@ SQLite keeps setup lightweight, and the default stack works well on a laptop wit
 
 ## Project status
 
-This is a prototype meant to make botanical collection stewardship more legible, reviewable, and locally deployable. It is intentionally conservative: deterministic first, human-reviewed where it matters, model-agnostic where useful.
+BEN-0 is a working prototype, tested against real IrisBG collection data. It is intentionally conservative: deterministic validation first, human-reviewed where it matters, model-agnostic where useful.
+
+**Current focus**: field registry (documenting and tiering all ~204 IrisBG columns for queryability), shadow/workbench database (a staging layer where the AI proposes corrections that staff approve before anything propagates), and a collection biodiversity report card (self-assessment of taxonomic diversity, conservation value, provenance quality, and nursery pipeline health).
+
+The goal is a tool any botanical garden can deploy on a laptop to make their collection data more legible, trustworthy, and useful, without sending anything to the cloud.
