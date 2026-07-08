@@ -154,6 +154,97 @@ def gardens():
         click.echo("\nNo active garden. Use 'ben0 use <name>' to activate one.")
 
 
+@cli.command(name="describe-fields")
+@click.option("--data-dir", default=None, help="Path to the directory containing IrisBG CSV exports.")
+def describe_fields_command(data_dir):
+    """Bootstrap or refresh the field registry from IrisBG CSV exports."""
+    from ben0 import config
+    from ben0.registry import bootstrap_registry, load_registry, merge_registry, registry_path_for_garden, save_registry
+
+    garden_root = config._GARDEN_ROOT
+    csv_paths = _resolve_registry_csv_paths(Path(data_dir) if data_dir else None)
+    fresh_registry = bootstrap_registry(csv_paths)
+    registry_path = registry_path_for_garden(garden_root)
+    merged_registry = merge_registry(load_registry(registry_path), fresh_registry)
+    save_registry(registry_path, merged_registry)
+
+    click.echo(f"Wrote {len(merged_registry.fields)} field entries to {registry_path}")
+    click.echo(f"Scanned: {', '.join(path.name for path in csv_paths)}")
+
+
+@cli.command(name="fields")
+@click.option(
+    "--tier",
+    type=click.Choice(["core", "useful", "niche", "skip"], case_sensitive=False),
+    default=None,
+    help="Only show fields in the selected tier.",
+)
+@click.option("--stats", "show_stats", is_flag=True, help="Show per-field stats and registry coverage.")
+def fields_command(tier, show_stats):
+    """List field registry contents for the active garden."""
+    from ben0 import config
+    from ben0.registry import format_registry, format_registry_stats, load_registry, registry_path_for_garden
+
+    registry_path = registry_path_for_garden(config._GARDEN_ROOT)
+    registry = load_registry(registry_path)
+    if registry is None:
+        raise click.ClickException("No field registry found. Run 'ben0 describe-fields' first.")
+
+    if show_stats:
+        click.echo(format_registry_stats(registry))
+    rendered = format_registry(registry, tier=tier.lower() if tier else None, show_stats=show_stats)
+    if rendered:
+        click.echo(rendered)
+    else:
+        click.echo("No matching fields.")
+
+
+@cli.command(name="review-fields")
+@click.option(
+    "--tier",
+    type=click.Choice(["core", "useful", "niche", "skip"], case_sensitive=False),
+    default=None,
+    help="Only review fields in the selected tier.",
+)
+def review_fields_command(tier):
+    """Review field descriptions, tiers, and notes interactively."""
+    from ben0 import config
+    from ben0.registry import load_registry, registry_path_for_garden, save_registry
+    from ben0.registry.display import filter_fields
+
+    registry_path = registry_path_for_garden(config._GARDEN_ROOT)
+    registry = load_registry(registry_path)
+    if registry is None:
+        raise click.ClickException("No field registry found. Run 'ben0 describe-fields' first.")
+
+    editable_fields = filter_fields(registry, tier=tier.lower() if tier else None)
+    if not editable_fields:
+        click.echo("No matching fields to review.")
+        return
+
+    tier_choices = ("core", "useful", "niche", "skip")
+    for entry in editable_fields:
+        click.echo()
+        click.echo(f"{entry.column} [{entry.tier}]")
+        click.echo(f"  source: {entry.source_file}")
+        click.echo(f"  description: {entry.description}")
+        click.echo(f"  db: {entry.db_mapping or '-'}")
+        if entry.sample_values:
+            click.echo(f"  samples: {', '.join(entry.sample_values)}")
+
+        description = click.prompt("Description", default=entry.description, show_default=False)
+        tier_value = click.prompt("Tier", default=entry.tier, type=click.Choice(tier_choices, case_sensitive=False))
+        notes = click.prompt("Notes", default=entry.notes, show_default=False)
+
+        entry.description = description.strip()
+        entry.tier = tier_value.lower()
+        entry.notes = notes.strip()
+
+    registry.reviewed = True
+    save_registry(registry_path, registry)
+    click.echo(f"Saved reviewed registry to {registry_path}")
+
+
 @cli.command()
 @click.option("--count", default=300, show_default=True, help="Number of accessions to generate.")
 def generate(count):
@@ -1176,6 +1267,27 @@ def sessions_delete(session_name):
     else:
         click.echo(f"Session '{session_name}' not found", err=True)
         sys.exit(1)
+
+
+def _resolve_registry_csv_paths(data_dir: Path | None) -> list[Path]:
+    from ben0 import config
+
+    candidate_dirs: list[Path] = []
+    if data_dir is not None:
+        candidate_dirs.append(data_dir)
+    candidate_dirs.extend([config.RAW_DIR, config.DATA_DIR, Path.cwd()])
+
+    filenames = ("accession_history.csv", "accession_item_history.csv")
+    for candidate_dir in candidate_dirs:
+        csv_paths = [candidate_dir / filename for filename in filenames]
+        if all(path.exists() for path in csv_paths):
+            return csv_paths
+
+    searched = ", ".join(str(path) for path in candidate_dirs)
+    raise click.ClickException(
+        "Could not find accession_history.csv and accession_item_history.csv. "
+        f"Searched: {searched}"
+    )
 
 
 if __name__ == "__main__":
